@@ -1,0 +1,74 @@
+listen_addr = "127.0.0.1:8900"
+data_dir = "./data"
+# ssh 模式必填（无默认值）
+ssh_user = ""
+default_shell = "bash"
+ssh_opts = "-tt -o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=4"
+max_sessions = 2
+idle_ttl_minutes = 30
+max_block_seconds = 30
+transcript_retention_days = 7
+
+# 日志：审计日志与服务运行日志都落到 log_dir 下，按时间切割（不按大小），文件名形如 audit.20260723.log。
+# 建议用绝对路径，避免日志落在启动时的工作目录里。
+# log_dir = "log"                 # 默认 log（相对启动目录；建议用绝对路径）
+# log_rotate = "daily"             # 切割周期：daily(按天) | hourly(按小时)
+# log_max_age_days = 30            # 旧日志保存周期（天）；<=0 表示永久保留
+# audit_log 只用于自定义审计日志文件名前缀（取其文件名去掉 .log）；留空则用 audit。
+audit_log = ""
+
+# shell 切换命令注册表：命中这些命令且命令跑完后哨兵丢失时，自动重新布哨（re-arm）恢复命令边界检测。
+# 明文、可追加（如需加 matrix_jail 等自定义进容器命令，把它加到列表里）。留空则用下列默认值。
+shell_switch_commands = ["ssh", "su", "sudo -i", "sudo su", "docker exec", "kubectl exec", "nsenter", "chroot"]
+# 是否自动布哨，默认 true；置 false 完全关闭自动布哨，仅保留手动 terminal_control(key="rearm")。
+auto_rearm = true
+
+# 以下两项为可选加固，默认关闭，多数使用者无需设置。
+# disable_local_mode（默认 false）：true 时禁止 mode=local，仅允许 ssh，避免暴露 MCP 宿主机本地 shell。
+disable_local_mode = false
+# ssh_login_prologue（默认留空）：ssh 前在本地 shell 执行的一条命令，常用于鉴权登录（凭证需与 ssh 同会话时）。
+# 需要多条时用 && 连接即可——整体仍被包在 `sh -c '{...} && exec ssh'` 里，成功后 exec 顶替进程、不残留本地 shell，
+# 失败则短路退出，均不会逃逸到本地 shell。无需鉴权/免密/公钥的使用者留空，ssh 直连。值按自己的鉴权方式填。
+# ssh_login_prologue = "<your-auth-login-command>"
+
+# resource_limit_cmd（默认留空）：会话启动后对模型「透明」注入的一条资源限制命令（通常是 ulimit）。
+# 随哨兵写在初始化脚本最前面，并在每次切进新一层 shell 的重新布哨（rearm）与 hard reset 时重新注入，因此：
+#   - 启动即作用于会话根 shell，被其所有子进程继承；ulimit 不带 -S/-H 时同时设软硬限，硬限一经设定非特权
+#     进程无法再调高，本地子 shell / 普通命令再怎么 ulimit 也无法逃逸出该上限；
+#   - 切进 ssh 远端 / su / docker exec / matrix_jail 等新 shell 后由 rearm 在新上下文重新注入。
+# 边界：ulimit 无法约束「提权 root 后调高自身硬限」，也无法约束「守护进程另起、不继承本会话的进程树」；
+# 要对本机进程树做与权限无关的强约束请改用 cgroup v2。多条限制用 ; 连接。
+# resource_limit_cmd = "ulimit -v 4194304; ulimit -t 600; ulimit -u 4096"
+
+# max_buffer_bytes（默认 8MiB）：会话输出的内存尾部缓存上限。输出的唯一真相源是磁盘上的
+# transcript（<transcript_dir>/<id>.raw），内存只保留最近这么多字节；更早的内容按需从 .raw
+# 回读，不丢失。防止 cat 大文件 / yes 等流式输出把进程内存顶爆。
+# max_buffer_bytes = 8388608
+
+# exec_output_max_bytes（默认 1MiB）：单次 terminal_send/terminal_read 返回给模型的上限。
+# 超过则只回头部预览 + 一个日志区间引用 {from,to}，用 terminal_read(mode=range, from, to) 翻取。
+# exec_output_max_bytes = 1048576
+
+# 分布式部署：本进程属于哪些兄弟节点组成的集群。
+# terminal_list 会向这些节点 fan-out 聚合会话（反向代理路由不需要此项——属主地址已编码在 session_id 内）。
+# 单机部署留空即可。分布式下所有节点可共用同一份配置：把 listen_addr 设为 "0.0.0.0:<port>"，
+# 进程会自动探测本机可达 IP 作为属主地址（无需每实例配不同地址）；跨 NAT/需对外映射时用嵌入接口
+# SetAdvertiseAddr 覆盖。peers 也可用 SetPeerProvider 动态发现，从而完全免配置。
+# peers = ["10.0.0.2:8900", "10.0.0.3:8900"]
+
+# 客户端身份签名：决定「如何判定同一个客户端」，用于 terminal_list 归属隔离与会话越权保护。
+# 身份 header 只能由可信网关注入（节点不应直接信任外部客户端自带的该头）。
+# [identity]
+# headers = ["X-MCP-USER"]   # 参与签名的 header（有序），由可信网关注入
+# mode = "raw"                # raw（拼接原值）| sha256（对拼接值取哈希）
+# on_missing = "reject"       # reject（缺头则拒绝调用）| allow_empty（缺失位视为空串）
+# 注意：on_missing=allow_empty 时所有无身份头的客户端共享同一个"空签名"，会互相看到/操作彼此的会话；
+# 启用 identity 前创建的历史会话 owner 为空，启用后将对任何带身份的客户端不可见。生产环境建议保持 reject。
+
+# 工具描述覆盖：按工具名改写对外暴露给模型的 MCP 工具说明（集成到外部 MCP、需按自家话术改写时用）。
+# 缺省或留空的工具沿用内置默认描述。key 取以下工具名之一：
+#   terminal_open / terminal_send / terminal_read / terminal_control /
+#   terminal_status / terminal_close / terminal_list / terminal_spill_explore
+# [tool_descriptions]
+# terminal_open = "打开一个持久终端会话并返回 session_id 与只读网页终端地址。"
+# terminal_send = "向会话输入一条命令并等待其结束，返回新增输出与状态。"

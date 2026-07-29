@@ -1,0 +1,11 @@
+# build output
+/pty-bridge-mcp
+pty-bridge-mcp
+
+# runtime data (transcripts, spill) — created relative to cwd or configured data_dir
+/data
+data/
+*.raw
+
+# test artifacts
+/tmp
