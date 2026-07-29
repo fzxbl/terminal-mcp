@@ -1,6 +1,7 @@
 package oplog
 
 import (
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,5 +120,29 @@ func TestAppendAfterCloseErrors(t *testing.T) {
 	}
 	if l.Len() != before {
 		t.Fatalf("Len changed after failed append: %d want %d", l.Len(), before)
+	}
+}
+
+func TestRangeReaderStreamsScopeOnly(t *testing.T) {
+	l := openTmp(t, 4096)
+	l.Append([]byte("0123456789abcdef"))
+	r := l.RangeReader(3, 10)
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "3456789" {
+		t.Fatalf("got %q want %q", got, "3456789")
+	}
+}
+
+func TestRangeReaderFixedEndUnderAppend(t *testing.T) {
+	l := openTmp(t, 4096)
+	l.Append([]byte("aaaa"))
+	r := l.RangeReader(0, 4)
+	l.Append([]byte("bbbb"))
+	got, _ := io.ReadAll(r)
+	if string(got) != "aaaa" {
+		t.Fatalf("got %q want aaaa", got)
 	}
 }

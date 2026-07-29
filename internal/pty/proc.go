@@ -117,6 +117,9 @@ func (p *ProcSession) ReadRange(from, to int64) string {
 	return string(b)
 }
 
+// RangeReader 返回底层日志固定区间的流式 reader。
+func (p *ProcSession) RangeReader(from, to int64) io.Reader { return p.log.RangeReader(from, to) }
+
 // Since 返回从绝对偏移 off 起到末尾的内容。
 func (p *ProcSession) Since(off int64) string { return p.ReadRange(off, p.log.Len()) }
 
