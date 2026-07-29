@@ -38,6 +38,7 @@ type readInput struct {
 	OutputRef  string `json:"output_ref,omitempty" jsonschema:"explore mode: the opaque reference returned in a truncated result"`
 	Op         string `json:"op,omitempty" jsonschema:"explore mode: stat | read | grep"`
 	LineOffset int    `json:"line_offset,omitempty" jsonschema:"explore read/grep start logical line (0-based; read accepts negative to count from the end)"`
+	ByteOffset int    `json:"byte_offset,omitempty" jsonschema:"explore read: intra-line byte cursor for continuing a long-line read (use the byte_offset returned by the previous read)"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"explore: max lines (read) or max matches (grep)"`
 	Pattern    string `json:"pattern,omitempty" jsonschema:"explore grep: Go regular expression"`
 	Before     int    `json:"before,omitempty" jsonschema:"explore grep: context lines before each match"`
@@ -197,7 +198,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 			}
 			env := session.Read(in.SessionID, session.ReadArgs{
 				Mode: in.Mode, WaitMs: in.WaitMs, OutputRef: in.OutputRef, Op: in.Op,
-				LineOffset: in.LineOffset, Limit: in.Limit, Pattern: in.Pattern,
+				LineOffset: in.LineOffset, ByteOffset: in.ByteOffset, Limit: in.Limit, Pattern: in.Pattern,
 				Before: in.Before, After: in.After, MaxBytes: in.MaxBytes,
 			})
 			logEnv(a, req, "terminal_read", map[string]any{

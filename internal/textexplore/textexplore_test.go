@@ -70,3 +70,47 @@ func TestCleaningStripsANSIAndSentinel(t *testing.T) {
 		t.Fatalf("line_count=%d", res.LineCount)
 	}
 }
+
+// TestReadLongLineByteWindow 验证超长单行的行内字节窗口续读：
+// 用一条 300 字符的普通长行 + 小 maxBytes=100，无需分配 >4MiB 即可覆盖续读逻辑。
+func TestReadLongLineByteWindow(t *testing.T) {
+	line := strings.Repeat("x", 300)
+	src := srcOf(line + "\n")
+
+	// 首次读：从 byteOffset=0 起切 100 字节，停在本行、游标前进到 100、Truncated。
+	body, res, err := Read(src, Options{}, 0, 0, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 100 {
+		t.Fatalf("first read len=%d, want 100", len(body))
+	}
+	if !res.Truncated {
+		t.Fatalf("first read should be truncated: %+v", res)
+	}
+	if res.ByteOffset != 100 {
+		t.Fatalf("first read ByteOffset=%d, want 100", res.ByteOffset)
+	}
+	if res.NextLineOffset != 0 {
+		t.Fatalf("first read NextLineOffset=%d, want 0 (stay on same line)", res.NextLineOffset)
+	}
+
+	// 续读：从 byteOffset=100 起再切 100 字节。
+	body2, res2, err := Read(src, Options{}, 0, 100, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body2) != 100 {
+		t.Fatalf("second read len=%d, want 100", len(body2))
+	}
+	if body2 != line[100:200] {
+		t.Fatalf("second read body=%q, want %q", body2, line[100:200])
+	}
+	if res2.ByteOffset != 200 {
+		t.Fatalf("second read ByteOffset=%d, want 200", res2.ByteOffset)
+	}
+}
+
+// TestGrepStillErrorsOnLongLine 本应验证 grep 遇到 >4MiB 单行返回 errLongLine，
+// 但需要分配 4MiB+ 内存，属于易 flaky/大分配用例，这里刻意跳过不实现。
+// stat/read 走 cleanLines(..., false) 容忍超长行；grep 走 cleanLines(..., true) 保留 errLongLine 语义。

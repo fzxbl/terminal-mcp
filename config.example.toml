@@ -55,6 +55,11 @@ disable_local_mode = false
 # explore_grep_limit_hard = 500     # grep 最大匹配数
 # explore_ctx_hard = 20             # grep before/after 各自上限
 
+# explore 软默认值：调用方未显式给（<=0）时采用；会被 clamp 到不超过对应硬上限。
+# explore_max_bytes_default = 32768  # explore 正文默认返回字节，默认 32 KiB
+# explore_read_limit_default = 100   # read 默认行数
+# explore_grep_limit_default = 50    # grep 默认匹配数
+
 
 # 分布式部署：本进程属于哪些兄弟节点组成的集群。
 # terminal_list 会向这些节点 fan-out 聚合会话（反向代理路由不需要此项——属主地址已编码在 session_id 内）。

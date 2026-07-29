@@ -32,11 +32,12 @@ type Envelope struct {
 type ExploreResult struct {
 	Op             string `json:"op"`
 	SizeBytes      int64  `json:"size_bytes,omitempty"`
-	LineCount      int    `json:"line_count,omitempty"`
-	MaxLineBytes   int    `json:"max_line_bytes,omitempty"`
-	NextLineOffset int    `json:"next_line_offset,omitempty"`
-	ByteOffset     int    `json:"byte_offset,omitempty"`
+	LineCount      int    `json:"line_count"`
+	MaxLineBytes   int    `json:"max_line_bytes"`
+	NextLineOffset int    `json:"next_line_offset"`
+	ByteOffset     int    `json:"byte_offset"`
 	EOF            bool   `json:"eof,omitempty"`
+	Truncated      bool   `json:"truncated,omitempty"`
 }
 
 // heldMsg 是人工接管期间拦截模型写操作的统一提示。
@@ -251,6 +252,7 @@ type ReadArgs struct {
 	OutputRef  string
 	Op         string
 	LineOffset int
+	ByteOffset int
 	Limit      int
 	Pattern    string
 	Before     int
@@ -330,19 +332,26 @@ func Read(id string, a ReadArgs) Envelope {
 	return env
 }
 
-// normExplore 把 explore 参数收敛到配置硬上限内（<=0 视为取默认硬上限）。
+// normExplore 收敛 explore 参数：调用方值 <=0 取「软默认」，>0 则 clamp 到「硬上限」。
+// before/after 独立处理：负值归 0，>硬上限归硬上限，0 保持 0（不套默认）。
 func normExplore(a *ReadArgs) {
 	c := config.Get()
-	if a.MaxBytes <= 0 || int64(a.MaxBytes) > c.ExploreMaxBytesHard {
+	if a.MaxBytes <= 0 {
+		a.MaxBytes = int(c.ExploreMaxBytesDefault)
+	} else if int64(a.MaxBytes) > c.ExploreMaxBytesHard {
 		a.MaxBytes = int(c.ExploreMaxBytesHard)
 	}
 	switch a.Op {
 	case "read":
-		if a.Limit <= 0 || a.Limit > c.ExploreReadLimitHard {
+		if a.Limit <= 0 {
+			a.Limit = c.ExploreReadLimitDefault
+		} else if a.Limit > c.ExploreReadLimitHard {
 			a.Limit = c.ExploreReadLimitHard
 		}
 	case "grep":
-		if a.Limit <= 0 || a.Limit > c.ExploreGrepLimitHard {
+		if a.Limit <= 0 {
+			a.Limit = c.ExploreGrepLimitDefault
+		} else if a.Limit > c.ExploreGrepLimitHard {
 			a.Limit = c.ExploreGrepLimitHard
 		}
 		if a.Before < 0 {
@@ -379,11 +388,15 @@ func doExplore(proc *pty.ProcSession, a ReadArgs) Envelope {
 		r.SizeBytes = sc.To - sc.From
 		return Envelope{State: "idle", Explore: toExplore(r)}
 	case "read":
-		body, r, err := textexplore.Read(src, opt, a.LineOffset, 0, a.Limit, a.MaxBytes)
+		body, r, err := textexplore.Read(src, opt, a.LineOffset, a.ByteOffset, a.Limit, a.MaxBytes)
 		if err != nil {
 			return Envelope{State: "idle", Error: err.Error()}
 		}
-		return Envelope{State: "idle", Output: body, Explore: toExplore(r)}
+		env := Envelope{State: "idle", Output: body, Explore: toExplore(r)}
+		if r.Truncated {
+			env.Truncated = true // 顶层 truncated 反映本次读窗被截断（超长行行内切片）
+		}
+		return env
 	case "grep":
 		if strings.TrimSpace(a.Pattern) == "" {
 			return Envelope{State: "idle", Error: "grep requires pattern"}
@@ -402,7 +415,7 @@ func toExplore(r textexplore.Result) *ExploreResult {
 	return &ExploreResult{
 		Op: r.Op, SizeBytes: r.SizeBytes, LineCount: r.LineCount,
 		MaxLineBytes: r.MaxLineBytes, NextLineOffset: r.NextLineOffset,
-		ByteOffset: r.ByteOffset, EOF: r.EOF,
+		ByteOffset: r.ByteOffset, EOF: r.EOF, Truncated: r.Truncated,
 	}
 }
 
@@ -583,6 +596,7 @@ type sessionReq struct {
 	OutputRef  string `json:"output_ref"`
 	ExploreOp  string `json:"explore_op"`
 	LineOffset int    `json:"line_offset"`
+	ByteOffset int    `json:"byte_offset"`
 	Limit      int    `json:"limit"`
 	Pattern    string `json:"pattern"`
 	Before     int    `json:"before"`
@@ -600,7 +614,7 @@ func execLocal(r sessionReq) Envelope {
 	case "read":
 		return Read(r.SessionID, ReadArgs{
 			Mode: r.Mode, WaitMs: r.WaitMs, OutputRef: r.OutputRef, Op: r.ExploreOp,
-			LineOffset: r.LineOffset, Limit: r.Limit, Pattern: r.Pattern,
+			LineOffset: r.LineOffset, ByteOffset: r.ByteOffset, Limit: r.Limit, Pattern: r.Pattern,
 			Before: r.Before, After: r.After, MaxBytes: r.MaxBytes,
 		})
 	case "control":

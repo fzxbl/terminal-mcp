@@ -8,25 +8,30 @@ import (
 )
 
 type Config struct {
-	DataDir                 string   `toml:"data_dir"`
-	ListenAddr              string   `toml:"listen_addr"`
-	SSHUser                 string   `toml:"ssh_user"`
-	DefaultShell            string   `toml:"default_shell"`
-	MaxSessions             int      `toml:"max_sessions"`
-	IdleTTLMinutes          int      `toml:"idle_ttl_minutes"`
-	ExecOutputMaxBytes      int64    `toml:"exec_output_max_bytes"`
-	MaxBufferBytes          int      `toml:"max_buffer_bytes"`
-	OpenReadyTimeoutMinutes int      `toml:"open_ready_timeout_minutes"`
-	SSHOpts                 string   `toml:"ssh_opts"`
-	MaxBlockSeconds         int      `toml:"max_block_seconds"`
-	QuietWindowMs           int      `toml:"quiet_window_ms"`
-	TailBytes               int      `toml:"tail_bytes"`
+	DataDir                 string `toml:"data_dir"`
+	ListenAddr              string `toml:"listen_addr"`
+	SSHUser                 string `toml:"ssh_user"`
+	DefaultShell            string `toml:"default_shell"`
+	MaxSessions             int    `toml:"max_sessions"`
+	IdleTTLMinutes          int    `toml:"idle_ttl_minutes"`
+	ExecOutputMaxBytes      int64  `toml:"exec_output_max_bytes"`
+	MaxBufferBytes          int    `toml:"max_buffer_bytes"`
+	OpenReadyTimeoutMinutes int    `toml:"open_ready_timeout_minutes"`
+	SSHOpts                 string `toml:"ssh_opts"`
+	MaxBlockSeconds         int    `toml:"max_block_seconds"`
+	QuietWindowMs           int    `toml:"quiet_window_ms"`
+	TailBytes               int    `toml:"tail_bytes"`
 
 	// explore（mode=explore）服务端硬上限：调用方传入更大值会被 clamp，不能扩大单次 MCP 返回体积。
 	ExploreMaxBytesHard  int64 `toml:"explore_max_bytes_hard"`  // explore 正文单次返回硬上限，默认 128 KiB
 	ExploreReadLimitHard int   `toml:"explore_read_limit_hard"` // read 行数上限，默认 1000
 	ExploreGrepLimitHard int   `toml:"explore_grep_limit_hard"` // grep 匹配数上限，默认 500
 	ExploreCtxHard       int   `toml:"explore_ctx_hard"`        // grep before/after 各自上限，默认 20
+
+	// explore 软默认值：调用方未显式给（<=0）时采用；与硬上限相互独立，且会被 clamp 到不超过对应硬上限。
+	ExploreMaxBytesDefault  int64    `toml:"explore_max_bytes_default"`  // explore 正文默认返回字节，默认 32 KiB
+	ExploreReadLimitDefault int      `toml:"explore_read_limit_default"` // read 默认行数，默认 100
+	ExploreGrepLimitDefault int      `toml:"explore_grep_limit_default"` // grep 默认匹配数，默认 50
 	InitCommands            []string `toml:"init_commands"`
 	DefaultFont             string   `toml:"default_font"`
 	DefaultFontSize         int      `toml:"default_font_size"`
@@ -143,6 +148,25 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ExploreCtxHard <= 0 {
 		c.ExploreCtxHard = 20
+	}
+	// explore 软默认值（guard <=0），并 clamp 到不超过对应硬上限。
+	if c.ExploreMaxBytesDefault <= 0 {
+		c.ExploreMaxBytesDefault = 32 << 10
+	}
+	if c.ExploreMaxBytesDefault > c.ExploreMaxBytesHard {
+		c.ExploreMaxBytesDefault = c.ExploreMaxBytesHard
+	}
+	if c.ExploreReadLimitDefault <= 0 {
+		c.ExploreReadLimitDefault = 100
+	}
+	if c.ExploreReadLimitDefault > c.ExploreReadLimitHard {
+		c.ExploreReadLimitDefault = c.ExploreReadLimitHard
+	}
+	if c.ExploreGrepLimitDefault <= 0 {
+		c.ExploreGrepLimitDefault = 50
+	}
+	if c.ExploreGrepLimitDefault > c.ExploreGrepLimitHard {
+		c.ExploreGrepLimitDefault = c.ExploreGrepLimitHard
 	}
 	if c.DefaultFont == "" {
 		c.DefaultFont = "consolas"

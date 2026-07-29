@@ -29,7 +29,7 @@ type Result struct {
 	LineCount      int
 	MaxLineBytes   int
 	NextLineOffset int
-	ByteOffset     int  // 超长行字节切分时行内续读游标；0 表示整行已消费
+	ByteOffset     int // 超长行字节切分时行内续读游标；0 表示整行已消费
 	EOF            bool
 	Truncated      bool
 }
@@ -40,9 +40,20 @@ func (*longLineError) Error() string { return "textexplore: single line exceeds 
 
 var errLongLine = &longLineError{}
 
-// readLimitedLine 读到 '\n' 或 EOF，返回不含 '\n'（及尾随 '\r'）的行；
-// 单行超过 maxRawLine 返回 errLongLine。
-func readLimitedLine(br *bufio.Reader) (string, error) {
+// readLimitedLine 读到 '\n' 或 EOF，返回不含 '\n'（及尾随 '\r'）的行。
+// failOnLongLine=true（grep）：单行超过 maxRawLine 返回 errLongLine（不整行加载）。
+// failOnLongLine=false（stat/read）：容忍超长行，用无界 ReadString 把整行读完，
+// 以便 Read 能对超长行做行内字节切片续读。
+func readLimitedLine(br *bufio.Reader, failOnLongLine bool) (string, error) {
+	if !failOnLongLine {
+		// 容忍超长行：一次读到 '\n' 或 EOF，不设 maxRawLine 上限。
+		s, err := br.ReadString('\n')
+		if err != nil {
+			// EOF（无尾随换行）：返回原样剩余，与有界路径的 EOF 行为一致。
+			return s, err
+		}
+		return strings.TrimSuffix(strings.TrimSuffix(s, "\n"), "\r"), nil
+	}
 	var sb strings.Builder
 	for {
 		b, err := br.ReadByte()
@@ -59,13 +70,14 @@ func readLimitedLine(br *bufio.Reader) (string, error) {
 	}
 }
 
-// cleanLines 从工厂 reader 逐物理行读取（单行上限 maxRawLine），拼回后走一次现有清洗，
+// cleanLines 从工厂 reader 逐物理行读取，拼回后走一次现有清洗，
 // 与 session 语义完全一致（含首行 echo-strip / observe 还原），再拆成清洗后逻辑行。
-func cleanLines(src func() io.Reader, opt Options) ([]string, error) {
+// failOnLongLine=true 时单行超 maxRawLine 立即 errLongLine（grep）；false 时容忍并整行加载（stat/read）。
+func cleanLines(src func() io.Reader, opt Options, failOnLongLine bool) ([]string, error) {
 	br := bufio.NewReader(src())
 	var raw []string
 	for {
-		line, err := readLimitedLine(br)
+		line, err := readLimitedLine(br, failOnLongLine)
 		if err == errLongLine {
 			return nil, errLongLine
 		}
@@ -96,7 +108,7 @@ func cleanLines(src func() io.Reader, opt Options) ([]string, error) {
 
 // Stat 返回清洗后行数与最大行字节（SizeBytes 由调用方按原始 scope 长度填充）。
 func Stat(src func() io.Reader, opt Options) (Result, error) {
-	lines, err := cleanLines(src, opt)
+	lines, err := cleanLines(src, opt, false)
 	if err != nil {
 		return Result{Op: "stat"}, err
 	}
@@ -112,7 +124,7 @@ func Stat(src func() io.Reader, opt Options) (Result, error) {
 // Read 从 lineOffset（负值从尾部倒数）起读最多 limit 行、正文总字节尽量不超 maxBytes。
 // 若某行本身超 maxBytes，则从 byteOffset 起在行内切一段返回，NextLineOffset 停在本行、ByteOffset 前进。
 func Read(src func() io.Reader, opt Options, lineOffset, byteOffset, limit, maxBytes int) (string, Result, error) {
-	lines, err := cleanLines(src, opt)
+	lines, err := cleanLines(src, opt, false)
 	if err != nil {
 		return "", Result{Op: "read"}, err
 	}
@@ -163,7 +175,7 @@ func Grep(src func() io.Reader, opt Options, pattern string, lineOffset, before,
 	if err != nil {
 		return "", Result{Op: "grep"}, err
 	}
-	lines, err := cleanLines(src, opt)
+	lines, err := cleanLines(src, opt, true)
 	if err != nil {
 		return "", Result{Op: "grep"}, err
 	}
