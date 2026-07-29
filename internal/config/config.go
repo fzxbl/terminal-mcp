@@ -21,6 +21,12 @@ type Config struct {
 	MaxBlockSeconds         int      `toml:"max_block_seconds"`
 	QuietWindowMs           int      `toml:"quiet_window_ms"`
 	TailBytes               int      `toml:"tail_bytes"`
+
+	// explore（mode=explore）服务端硬上限：调用方传入更大值会被 clamp，不能扩大单次 MCP 返回体积。
+	ExploreMaxBytesHard  int64 `toml:"explore_max_bytes_hard"`  // explore 正文单次返回硬上限，默认 128 KiB
+	ExploreReadLimitHard int   `toml:"explore_read_limit_hard"` // read 行数上限，默认 1000
+	ExploreGrepLimitHard int   `toml:"explore_grep_limit_hard"` // grep 匹配数上限，默认 500
+	ExploreCtxHard       int   `toml:"explore_ctx_hard"`        // grep before/after 各自上限，默认 20
 	InitCommands            []string `toml:"init_commands"`
 	DefaultFont             string   `toml:"default_font"`
 	DefaultFontSize         int      `toml:"default_font_size"`
@@ -125,6 +131,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.TailBytes <= 0 {
 		c.TailBytes = 64 * 1024
+	}
+	if c.ExploreMaxBytesHard <= 0 {
+		c.ExploreMaxBytesHard = 128 << 10
+	}
+	if c.ExploreReadLimitHard <= 0 {
+		c.ExploreReadLimitHard = 1000
+	}
+	if c.ExploreGrepLimitHard <= 0 {
+		c.ExploreGrepLimitHard = 500
+	}
+	if c.ExploreCtxHard <= 0 {
+		c.ExploreCtxHard = 20
 	}
 	if c.DefaultFont == "" {
 		c.DefaultFont = "consolas"

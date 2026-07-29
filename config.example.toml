@@ -46,8 +46,15 @@ disable_local_mode = false
 # max_buffer_bytes = 8388608
 
 # exec_output_max_bytes（默认 1MiB）：单次 terminal_send/terminal_read 返回给模型的上限。
-# 超过则只回头部预览 + 一个日志区间引用 {from,to}，用 terminal_read(mode=range, from, to) 翻取。
+# 超过则只回头部预览 + 一个 output_ref（签名 token），用 terminal_read(mode=explore, output_ref, op=stat|grep|read) 探索。
 # exec_output_max_bytes = 1048576
+
+# explore 服务端硬上限：调用方传入更大值会被 clamp，不能扩大单次 MCP 返回体积。
+# explore_max_bytes_hard = 131072   # explore 正文单次返回硬上限，默认 128 KiB
+# explore_read_limit_hard = 1000    # read 最大行数
+# explore_grep_limit_hard = 500     # grep 最大匹配数
+# explore_ctx_hard = 20             # grep before/after 各自上限
+
 
 # 分布式部署：本进程属于哪些兄弟节点组成的集群。
 # terminal_list 会向这些节点 fan-out 聚合会话（反向代理路由不需要此项——属主地址已编码在 session_id 内）。
