@@ -54,7 +54,7 @@ func TestReadTailSeesBufferedOutput(t *testing.T) {
 	id := openLocalReady(t)
 	defer Close(id)
 	Send(id, "echo buffered", 5000)
-	env := Read(id, 0, "tail", 0, 0)
+	env := Read(id, ReadArgs{Mode: "tail"})
 	if !strings.Contains(env.Output, "buffered") {
 		t.Fatalf("tail missed buffered output: %q", env.Output)
 	}
@@ -66,9 +66,9 @@ func TestReadSinceLastDrains(t *testing.T) {
 	Send(id, "echo first", 5000) // Send advances delivered cursor
 	Send(id, "echo second", 5000)
 	// since_last should return only new output since last delivery, then be empty on repeat
-	env := Read(id, 0, "since_last", 0, 0)
+	env := Read(id, ReadArgs{Mode: "since_last"})
 	_ = env
-	env2 := Read(id, 0, "since_last", 0, 0)
+	env2 := Read(id, ReadArgs{Mode: "since_last"})
 	if strings.TrimSpace(env2.Output) != "" {
 		t.Fatalf("since_last should be empty on immediate repeat, got %q", env2.Output)
 	}
@@ -278,11 +278,11 @@ func TestTakeoverContentVisibleAfterRelease(t *testing.T) {
 	// 人交回控制权：此后模型才来读，读取瞬间 held 已为 false。
 	sess.SetHold(false)
 
-	tail := Read(id, 0, "tail", 0, 0)
+	tail := Read(id, ReadArgs{Mode: "tail"})
 	if !strings.Contains(tail.Output, "echo human_typed") {
 		t.Fatalf("tail after release missing human command: %q", tail.Output)
 	}
-	env := Read(id, 0, "since_last", 0, 0)
+	env := Read(id, ReadArgs{Mode: "since_last"})
 	if !strings.Contains(env.Output, "echo human_typed") {
 		t.Fatalf("since_last after release missing human command: %q", env.Output)
 	}
@@ -319,35 +319,61 @@ func TestResourceLimitInjectedAndInheritedUnescapable(t *testing.T) {
 	}
 }
 
-// TestReadRangePagesOversizedOutput 校验：单次输出超过 exec_output_max_bytes 时返回 Range 引用，
-// 且用 mode=range 逐页能把整段区间完整取回（分页器不再自我引用同一区间）。
-func TestReadRangePagesOversizedOutput(t *testing.T) {
-	config.Load("")
-	old := config.Get().ExecOutputMaxBytes
-	config.Get().ExecOutputMaxBytes = 256
-	defer func() { config.Get().ExecOutputMaxBytes = old }()
-
+// TestReadExploreStatReadGrep 校验：单次输出超过 exec_output_max_bytes 时返回 output_ref，
+// 且用 mode=explore 的 stat/grep/read 能在该固定区间内探索完整内容。
+func TestReadExploreStatReadGrep(t *testing.T) {
 	id := openLocalReady(t)
 	defer Close(id)
+	old := config.Get().ExecOutputMaxBytes
+	config.Get().ExecOutputMaxBytes = 64
+	defer func() { config.Get().ExecOutputMaxBytes = old }()
 
-	env := Send(id, "for i in $(seq 1 500); do echo LINE$i; done", 8000)
-	if !env.Truncated || env.Range == nil {
-		t.Fatalf("expected truncated+range, got truncated=%v range=%v output=%q", env.Truncated, env.Range, env.Output)
+	env := Send(id, "for i in $(seq 1 60); do echo line-$i; done", 30000)
+	if !env.Truncated || env.OutputRef == "" {
+		t.Fatalf("want oversized ref, got %+v", env)
 	}
+	ref := env.OutputRef
 
-	var acc strings.Builder
-	from, to := env.Range.From, env.Range.To
-	for i := 0; i < 2000; i++ {
-		p := Read(id, 0, "range", from, to)
-		acc.WriteString(p.Output)
-		if p.Range == nil {
-			break
-		}
-		from, to = p.Range.From, p.Range.To
+	st := Read(id, ReadArgs{Mode: "explore", OutputRef: ref, Op: "stat"})
+	if st.Explore == nil || st.Explore.LineCount < 60 {
+		t.Fatalf("stat=%+v", st.Explore)
 	}
-	out := acc.String()
-	if !strings.Contains(out, "LINE1") || !strings.Contains(out, "LINE500") {
-		t.Fatalf("paged range missing content (len=%d)", len(out))
+	g := Read(id, ReadArgs{Mode: "explore", OutputRef: ref, Op: "grep", Pattern: "line-42"})
+	if !strings.Contains(g.Output, "line-42") {
+		t.Fatalf("grep out=%q", g.Output)
+	}
+	rd := Read(id, ReadArgs{Mode: "explore", OutputRef: ref, Op: "read", LineOffset: -1})
+	if strings.TrimSpace(rd.Output) == "" {
+		t.Fatalf("read tail empty: %+v", rd)
+	}
+}
+
+// TestExploreDoesNotAdvanceDelivered 校验 explore 是只读探索，不推进 since_last 游标。
+func TestExploreDoesNotAdvanceDelivered(t *testing.T) {
+	id := openLocalReady(t)
+	defer Close(id)
+	old := config.Get().ExecOutputMaxBytes
+	config.Get().ExecOutputMaxBytes = 64
+	defer func() { config.Get().ExecOutputMaxBytes = old }()
+	env := Send(id, "for i in $(seq 1 60); do echo n-$i; done", 30000)
+	if env.OutputRef == "" {
+		t.Fatalf("expected oversized")
+	}
+	d1 := theStore.get(id).delivered()
+	Read(id, ReadArgs{Mode: "explore", OutputRef: env.OutputRef, Op: "stat"})
+	d2 := theStore.get(id).delivered()
+	if d1 != d2 {
+		t.Fatalf("explore advanced delivered: %d -> %d", d1, d2)
+	}
+}
+
+// TestExploreBadRefErrors 校验伪造/损坏的 output_ref 直接报错，绝不回退到默认区间。
+func TestExploreBadRefErrors(t *testing.T) {
+	id := openLocalReady(t)
+	defer Close(id)
+	env := Read(id, ReadArgs{Mode: "explore", OutputRef: "bogus.token", Op: "stat"})
+	if env.Error == "" {
+		t.Fatalf("expected error for bad ref")
 	}
 }
 

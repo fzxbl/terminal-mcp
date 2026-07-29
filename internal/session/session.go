@@ -2,31 +2,41 @@ package session
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/fzxbl/terminal-mcp/internal/clean"
 	"github.com/fzxbl/terminal-mcp/internal/config"
 	"github.com/fzxbl/terminal-mcp/internal/interp"
+	"github.com/fzxbl/terminal-mcp/internal/outputref"
 	"github.com/fzxbl/terminal-mcp/internal/pty"
+	"github.com/fzxbl/terminal-mcp/internal/textexplore"
 )
 
 // Envelope 是所有会话工具的统一返回。
 type Envelope struct {
-	Output    string    `json:"output"`
-	State     string    `json:"state"`
-	Prompt    string    `json:"prompt,omitempty"`
-	ExitCode  *int      `json:"exit_code,omitempty"`
-	Truncated bool      `json:"truncated,omitempty"`
-	Range     *LogRange `json:"range,omitempty"`
-	Held      bool      `json:"held,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	Output          string         `json:"output"`
+	State           string         `json:"state"`
+	Prompt          string         `json:"prompt,omitempty"`
+	ExitCode        *int           `json:"exit_code,omitempty"`
+	Truncated       bool           `json:"truncated,omitempty"`
+	OutputRef       string         `json:"output_ref,omitempty"`
+	OutputSizeBytes int64          `json:"output_size_bytes,omitempty"`
+	Explore         *ExploreResult `json:"explore,omitempty"`
+	Held            bool           `json:"held,omitempty"`
+	Error           string         `json:"error,omitempty"`
 }
 
-// LogRange 是日志区间引用：模型用 terminal_read(mode=range,from,to) 翻取完整内容。
-type LogRange struct {
-	From int64 `json:"from"`
-	To   int64 `json:"to"`
+// ExploreResult 是 mode=explore 的导航元数据；正文继续放在 Envelope.Output。
+type ExploreResult struct {
+	Op             string `json:"op"`
+	SizeBytes      int64  `json:"size_bytes,omitempty"`
+	LineCount      int    `json:"line_count,omitempty"`
+	MaxLineBytes   int    `json:"max_line_bytes,omitempty"`
+	NextLineOffset int    `json:"next_line_offset,omitempty"`
+	ByteOffset     int    `json:"byte_offset,omitempty"`
+	EOF            bool   `json:"eof,omitempty"`
 }
 
 // heldMsg 是人工接管期间拦截模型写操作的统一提示。
@@ -196,7 +206,7 @@ func Send(id, input string, waitMs int) Envelope {
 	// （既杜绝半截颜色漏给 LLM，也顺带修掉 setDelivered(Len()) 与 since() 分锁的丢字节竞态）。
 	k := clean.DeliverBoundary(raw, state)
 	sess.setDelivered(start + int64(k))
-	return finalize(clean.CleanOutput(raw[:k], input), start, start+int64(k), state, prompt, code)
+	return finalizeScope(clean.CleanOutput(raw[:k], input), start, start+int64(k), state, prompt, code, input, false)
 }
 
 // sendWithRearm 在检测到切进新层 shell 后重新布哨（对模型透明，做进同一次 Send）。
@@ -231,12 +241,26 @@ func sendWithRearm(sess *Session, proc *pty.ProcSession, input string, start int
 			out = note
 		}
 	}
-	return finalize(out, start, armStart, state, prompt, code)
+	return finalizeScope(out, start, armStart, state, prompt, code, input, false)
+}
+
+// ReadArgs 承载 explore 的全部可选参数，避免 Read 参数爆炸。
+type ReadArgs struct {
+	Mode       string
+	WaitMs     int
+	OutputRef  string
+	Op         string
+	LineOffset int
+	Limit      int
+	Pattern    string
+	Before     int
+	After      int
+	MaxBytes   int
 }
 
 // Read 观察输出。mode=tail：立即取尾部窗口；mode=since_last：取交付游标之后；
-// mode=range：按 [from,to) 区间翻取完整内容。
-func Read(id string, waitMs int, mode string, rangeFrom, rangeTo int64) Envelope {
+// mode=explore：按 output_ref 在固定区间内做 stat/read/grep 探索（不推进 since_last 游标）。
+func Read(id string, a ReadArgs) Envelope {
 	sess := theStore.get(id)
 	if sess == nil {
 		return Envelope{State: "dead", Error: "session not found: " + id}
@@ -246,12 +270,15 @@ func Read(id string, waitMs int, mode string, rangeFrom, rangeTo int64) Envelope
 		return Envelope{State: "dead", Error: "no live process"}
 	}
 	sess.touch()
-	if waitMs > 0 {
-		waitSettled(proc, time.Now().Add(capBlock(waitMs, 500)))
+	if a.WaitMs > 0 && a.Mode != "explore" {
+		waitSettled(proc, time.Now().Add(capBlock(a.WaitMs, 500)))
+	}
+	if a.Mode == "explore" {
+		return doExplore(proc, a)
 	}
 	state, prompt, code := computeState(sess)
 	heldNow := sess.held()
-	if mode == "since_last" {
+	if a.Mode == "since_last" {
 		off := sess.delivered()
 		raw := proc.Since(off)
 		// 只按本次实际交付的字节数推进游标，绝不推到 Len()：
@@ -274,26 +301,7 @@ func Read(id string, waitMs int, mode string, rangeFrom, rangeTo int64) Envelope
 				}
 			}
 		}
-		env := finalize(clean.ObserveOrClean(raw[:k], observe), off, off+int64(k), state, prompt, code)
-		env.Held = heldNow
-		return env
-	}
-	if mode == "range" {
-		to := rangeTo
-		// range 是显式分页读：每次最多返回 ExecOutputMaxBytes，剩余部分用 Range 指向下一窗口，
-		// 保证能把 since_last 溢出时给出的整段区间逐页取完（不再自我引用同一区间）。
-		max := config.Get().ExecOutputMaxBytes
-		end := to
-		if max > 0 && end-rangeFrom > max {
-			end = rangeFrom + max
-		}
-		out := proc.ReadRange(rangeFrom, end)
-		env := Envelope{Output: clean.CleanOutput(out, ""), State: state, Prompt: prompt, ExitCode: code}
-		if end < to {
-			env.Range = &LogRange{From: end, To: to}
-			env.Truncated = true
-			env.Output += fmt.Sprintf("\n[还有 %d 字节未读；用 terminal_read(mode=range, from=%d, to=%d) 继续]", to-end, end, to)
-		}
+		env := finalizeScope(clean.ObserveOrClean(raw[:k], observe), off, off+int64(k), state, prompt, code, "", observe)
 		env.Held = heldNow
 		return env
 	}
@@ -320,6 +328,82 @@ func Read(id string, waitMs int, mode string, rangeFrom, rangeTo int64) Envelope
 			config.Get().TailBytes, total-int64(config.Get().TailBytes))
 	}
 	return env
+}
+
+// normExplore 把 explore 参数收敛到配置硬上限内（<=0 视为取默认硬上限）。
+func normExplore(a *ReadArgs) {
+	c := config.Get()
+	if a.MaxBytes <= 0 || int64(a.MaxBytes) > c.ExploreMaxBytesHard {
+		a.MaxBytes = int(c.ExploreMaxBytesHard)
+	}
+	switch a.Op {
+	case "read":
+		if a.Limit <= 0 || a.Limit > c.ExploreReadLimitHard {
+			a.Limit = c.ExploreReadLimitHard
+		}
+	case "grep":
+		if a.Limit <= 0 || a.Limit > c.ExploreGrepLimitHard {
+			a.Limit = c.ExploreGrepLimitHard
+		}
+		if a.Before < 0 {
+			a.Before = 0
+		} else if a.Before > c.ExploreCtxHard {
+			a.Before = c.ExploreCtxHard
+		}
+		if a.After < 0 {
+			a.After = 0
+		} else if a.After > c.ExploreCtxHard {
+			a.After = c.ExploreCtxHard
+		}
+	}
+}
+
+// doExplore 在 output_ref 指向的固定区间内做 stat/read/grep；只读，不推进 since_last 游标。
+func doExplore(proc *pty.ProcSession, a ReadArgs) Envelope {
+	sc, err := outputref.Parse(a.OutputRef)
+	if err != nil {
+		return Envelope{State: "idle", Error: "invalid output_ref: " + err.Error()}
+	}
+	if sc.From < 0 || sc.To > proc.Len() || sc.From > sc.To {
+		return Envelope{State: "idle", Error: "output_ref range out of bounds"}
+	}
+	normExplore(&a)
+	src := func() io.Reader { return proc.RangeReader(sc.From, sc.To) }
+	opt := textexplore.Options{Observe: sc.Observe, Input: sc.Input}
+	switch a.Op {
+	case "stat":
+		r, err := textexplore.Stat(src, opt)
+		if err != nil {
+			return Envelope{State: "idle", Error: err.Error()}
+		}
+		r.SizeBytes = sc.To - sc.From
+		return Envelope{State: "idle", Explore: toExplore(r)}
+	case "read":
+		body, r, err := textexplore.Read(src, opt, a.LineOffset, 0, a.Limit, a.MaxBytes)
+		if err != nil {
+			return Envelope{State: "idle", Error: err.Error()}
+		}
+		return Envelope{State: "idle", Output: body, Explore: toExplore(r)}
+	case "grep":
+		if strings.TrimSpace(a.Pattern) == "" {
+			return Envelope{State: "idle", Error: "grep requires pattern"}
+		}
+		body, r, err := textexplore.Grep(src, opt, a.Pattern, a.LineOffset, a.Before, a.After, a.Limit, a.MaxBytes)
+		if err != nil {
+			return Envelope{State: "idle", Error: err.Error()}
+		}
+		return Envelope{State: "idle", Output: body, Explore: toExplore(r)}
+	default:
+		return Envelope{State: "idle", Error: "unknown explore op: " + a.Op}
+	}
+}
+
+func toExplore(r textexplore.Result) *ExploreResult {
+	return &ExploreResult{
+		Op: r.Op, SizeBytes: r.SizeBytes, LineCount: r.LineCount,
+		MaxLineBytes: r.MaxLineBytes, NextLineOffset: r.NextLineOffset,
+		ByteOffset: r.ByteOffset, EOF: r.EOF,
+	}
 }
 
 // controlKeys 把可读的控制键名映射到写入 PTY 的控制字节（多为 C0 控制码）。
@@ -445,9 +529,13 @@ func Close(id string) Envelope {
 	return Envelope{State: "dead"}
 }
 
-// finalize 组装返回；当交付区间 [from,to) 字节数超过 exec_output_max_bytes 时，
-// 只回头部预览 + Range 引用（模型用 terminal_read(mode=range,from,to) 翻取）。
+// finalize 组装返回；交付区间未超上限时等价于普通 Envelope（from==to==0 的场景永不超限）。
 func finalize(output string, from, to int64, state, prompt string, code *int) Envelope {
+	return finalizeScope(output, from, to, state, prompt, code, "", false)
+}
+
+// finalizeScope 组装返回；交付区间超 exec_output_max_bytes 时只回预览 + output_ref（携带清洗语义供 explore 复原）。
+func finalizeScope(output string, from, to int64, state, prompt string, code *int, input string, observe bool) Envelope {
 	env := Envelope{Output: output, State: state, Prompt: prompt, ExitCode: code}
 	if to-from > config.Get().ExecOutputMaxBytes {
 		const previewMax = 2048
@@ -455,9 +543,9 @@ func finalize(output string, from, to int64, state, prompt string, code *int) En
 		if len(preview) > previewMax {
 			preview = preview[:previewMax]
 		}
-		env.Output = fmt.Sprintf("%s\n[输出 %d 字节超过上限，仅显示头部；用 terminal_read(mode=range, from=%d, to=%d) 分页取完整内容]",
-			preview, to-from, from, to)
-		env.Range = &LogRange{From: from, To: to}
+		env.Output = fmt.Sprintf("%s\n[输出 %d 字节超过上限，仅显示头部；用 terminal_read(mode=explore, output_ref=..., op=stat|grep|read) 探索完整内容]", preview, to-from)
+		env.OutputRef = outputref.Sign(outputref.Scope{From: from, To: to, Input: input, Observe: observe})
+		env.OutputSizeBytes = to - from
 		env.Truncated = true
 	}
 	return env
@@ -486,14 +574,20 @@ func startSessionTracked(id, host, mode, name string, args []string) (*Session, 
 
 // sessionReq 是会话操作的统一入参。
 type sessionReq struct {
-	Op        string `json:"op"`
-	SessionID string `json:"session_id"`
-	Input     string `json:"input"`
-	WaitMs    int    `json:"wait_ms"`
-	Mode      string `json:"mode"`
-	Key       string `json:"key"`
-	RangeFrom int64  `json:"range_from"`
-	RangeTo   int64  `json:"range_to"`
+	Op         string `json:"op"`
+	SessionID  string `json:"session_id"`
+	Input      string `json:"input"`
+	WaitMs     int    `json:"wait_ms"`
+	Mode       string `json:"mode"`
+	Key        string `json:"key"`
+	OutputRef  string `json:"output_ref"`
+	ExploreOp  string `json:"explore_op"`
+	LineOffset int    `json:"line_offset"`
+	Limit      int    `json:"limit"`
+	Pattern    string `json:"pattern"`
+	Before     int    `json:"before"`
+	After      int    `json:"after"`
+	MaxBytes   int    `json:"max_bytes"`
 }
 
 // dispatch 执行会话操作（单节点，本地执行）。
@@ -504,7 +598,11 @@ func execLocal(r sessionReq) Envelope {
 	case "send":
 		return Send(r.SessionID, r.Input, r.WaitMs)
 	case "read":
-		return Read(r.SessionID, r.WaitMs, r.Mode, r.RangeFrom, r.RangeTo)
+		return Read(r.SessionID, ReadArgs{
+			Mode: r.Mode, WaitMs: r.WaitMs, OutputRef: r.OutputRef, Op: r.ExploreOp,
+			LineOffset: r.LineOffset, Limit: r.Limit, Pattern: r.Pattern,
+			Before: r.Before, After: r.After, MaxBytes: r.MaxBytes,
+		})
 	case "control":
 		return Control(r.SessionID, r.Key)
 	case "status":

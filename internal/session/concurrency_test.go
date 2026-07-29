@@ -16,7 +16,7 @@ func TestConcurrentReadStatusWithHardReset(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for time.Now().Before(stop) {
-				_ = Read(id, 0, "tail", 0, 0)
+				_ = Read(id, ReadArgs{Mode: "tail"})
 				_ = Status(id)
 			}
 		}()
