@@ -218,6 +218,18 @@ func (r *rangeReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Close 关闭惰性打开的 O_RDONLY fd（幂等）：未打开时无操作。
+// 使 *rangeReader 满足 io.ReadCloser，供提前停止（未读到 EOF）的消费方确定性释放 fd，
+// 避免依赖 GC；EOF 自关闭快路径仍保留。
+func (r *rangeReader) Close() error {
+	if r.f == nil {
+		return nil
+	}
+	err := r.f.Close()
+	r.f = nil
+	return err
+}
+
 // Close 关闭底层文件。
 func (l *Log) Close() error {
 	l.mu.Lock()

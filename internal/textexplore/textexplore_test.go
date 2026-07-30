@@ -156,3 +156,25 @@ func TestObserveReconstructsSentinelThroughRead(t *testing.T) {
 		t.Fatalf("observe reconstruction missing: body=%q", body)
 	}
 }
+
+// TestReadLimitZeroYieldsNoLines 固化 limit<=0 的语义：正向与负向 offset 均返回空正文、0 行，
+// 与 readNegative 及旧 main 行为一致（不因 readForward「先 append 再判 limit」而多吐 1 行）。
+func TestReadLimitZeroYieldsNoLines(t *testing.T) {
+	in := "l0\nl1\nl2\nl3\n"
+	for _, off := range []int{0, -1} {
+		body, res, err := Read(srcOf(in), Options{}, off, 0, 0, 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != "" {
+			t.Fatalf("offset=%d: body=%q want empty", off, body)
+		}
+		lines := 0
+		if body != "" {
+			lines = strings.Count(body, "\n") + 1
+		}
+		if lines != 0 {
+			t.Fatalf("offset=%d: got %d lines, want 0 (res=%+v)", off, lines, res)
+		}
+	}
+}

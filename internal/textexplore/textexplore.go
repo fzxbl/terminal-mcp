@@ -81,7 +81,13 @@ func readLimitedLine(br *bufio.Reader, failOnLongLine bool) (string, error) {
 // 拆开、逐条当作独立逻辑行计数，才能与旧的 strings.Split(CleanOutput(...), "\n") 行集完全一致。
 // LineCleaner 内部已丢弃首部空行、缓冲尾随空行（Flush 为 no-op），无需在此额外 Trim。
 func eachCleanLine(src func() io.Reader, opt Options, failOnLongLine bool, fn func(idx int, line string) bool) error {
-	br := bufio.NewReader(src())
+	// 取一次 reader；若其实现了 io.Closer（如 oplog.rangeReader 惰性打开的 O_RDONLY fd），
+	// 提前停止（read/grep 命中 limit/maxBytes 未读到 EOF）时也确定性关闭，避免 fd 泄漏到 GC。
+	r := src()
+	if c, ok := r.(io.Closer); ok {
+		defer c.Close()
+	}
+	br := bufio.NewReader(r)
 	lc := clean.NewLineCleaner(opt.Input, opt.Observe)
 	idx := 0
 	// emit 拆分清洗片段为逐条逻辑行，返回 false 表示 fn 要求提前停止。
@@ -182,6 +188,15 @@ func readForward(src func() io.Reader, opt Options, start, byteOffset, limit, ma
 			ln = ln[byteOffset:]
 		}
 		if maxBytes > 0 && used+len(ln) > maxBytes && len(out) > 0 {
+			res.NextLineOffset = idx
+			res.EOF = false
+			resolved = true
+			return false
+		}
+		// 收满 limit 前才收集普通行：len(out) >= limit 时不再 append（limit<=0 时一条都不收，
+		// 与 readNegative 及旧 main 行为一致），本行即为窗口之后的第一行。
+		// 长行行内字节窗口分支已在上方独立处理，不受此约束。
+		if len(out) >= limit {
 			res.NextLineOffset = idx
 			res.EOF = false
 			resolved = true

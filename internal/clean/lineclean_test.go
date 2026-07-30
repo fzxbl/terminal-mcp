@@ -97,3 +97,29 @@ func TestLineCleanEquivalence(t *testing.T) {
 		t.Run(string(rune('A'+i)), func(t *testing.T) { eq(t, c.raw, c.input, c.observe) })
 	}
 }
+
+// TestLineCleanKnownOSCDivergence 固化一个已知且被接受的差异边界，防止其被静默改变。
+//
+// 整串清洗（CleanOutput/ObserveOrClean）先对完整字符串 StripANSI：一段 ANSI OSC/DCS
+// 序列即便正文里含裸 '\n'，也会被作为一个整体消费掉。而逐行清洗（LineCleaner，textexplore
+// 所用）先按物理行 '\n' 切分，再逐行 StripANSI——它无法跨物理行识别这类跨行序列，于是与整串
+// 结果产生分歧。真实 PTY 命令输出不会产出正文内嵌 '\n' 的 OSC/DCS 序列，故此边界作为已文档化
+// 的限制被接受。这里显式断言「二者不同」以钉住当前行为；不对这些用例断言等价（那样必然失败）。
+func TestLineCleanKnownOSCDivergence(t *testing.T) {
+	raws := []string{
+		"\x1b]0;title\nmore\x07after\n",
+		"\x1bP1;2q\ndata\x1b\\tail\n",
+		"a\x1b]2;t\nb\x07c\nd\n",
+	}
+	for i, raw := range raws {
+		raw := raw
+		t.Run(string(rune('A'+i)), func(t *testing.T) {
+			stream := streamClean(raw, "", false)
+			whole := CleanOutput(raw, "")
+			t.Logf("raw=%q\n stream=%q\n whole =%q", raw, stream, whole)
+			if stream == whole {
+				t.Fatalf("expected known OSC/DCS divergence, but LineCleaner matched CleanOutput\n raw=%q\n result=%q", raw, stream)
+			}
+		})
+	}
+}

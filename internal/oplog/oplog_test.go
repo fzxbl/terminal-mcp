@@ -159,3 +159,25 @@ func TestRangeReaderSingleFDColdAndHot(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// TestRangeReaderClose 校验 rangeReader 实现 io.Closer，且 Close 安全/幂等：
+// 部分读后关闭惰性打开的 fd 应成功，重复 Close 亦不报错（提前停止路径确定性释放 fd）。
+func TestRangeReaderClose(t *testing.T) {
+	l := openTmp(t, 4096)
+	l.Append([]byte("hello world"))
+	r := l.RangeReader(0, 11)
+	buf := make([]byte, 3)
+	if _, err := r.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	c, ok := r.(io.Closer)
+	if !ok {
+		t.Fatal("rangeReader should implement io.Closer")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil { // idempotent
+		t.Fatal(err)
+	}
+}
