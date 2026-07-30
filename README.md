@@ -34,7 +34,7 @@ Plus the machinery that makes the above reliable:
 
 - **Precise command boundaries.** A sentinel prompt tells the server exactly when a command finished and its exit code — the agent never mistakes "still running" for "done".
 - **Survives shell switches.** `ssh`, `su`, `docker exec`, entering a container — the sentinel is re-armed automatically so tracking keeps working across hops.
-- **LLM-friendly output.** ANSI escapes stripped, partial escape sequences held back — the model never gets corrupted bytes. The session log is an append-only file on disk (the source of truth) with a bounded in-memory tail cache, so a runaway `cat`/`yes` can't blow up memory; oversized results are returned as a log-range reference and paged on demand.
+- **LLM-friendly output.** ANSI escapes stripped, partial escape sequences held back — the model never gets corrupted bytes. The session log is an append-only file on disk (the source of truth) with a bounded in-memory tail cache, so a runaway `cat`/`yes` can't blow up memory; oversized results come back as an opaque `output_ref` you explore on demand (`stat`/`read`/`grep`) — the model pulls only the lines it needs instead of paging the whole thing.
 - **Local & remote.** `mode=local` runs a shell/command on the host; `mode=ssh` connects out.
 - **Audit & replay.** Every tool call logged as JSON (caller IP, user, tool, args, result); every session's raw byte stream saved for replay, with configurable retention.
 
@@ -85,7 +85,7 @@ The agent opens a session, runs commands, and streams back results. If it needs 
 | --- | --- |
 | `terminal_open(mode, command?, host?)` | Start a persistent PTY session. `mode=local` or `mode=ssh`. Returns `session_id` + `terminal_url`. |
 | `terminal_send(session_id, input, wait_ms?)` | Type a command, wait for it to settle. Returns output, state, exit_code. |
-| `terminal_read(session_id, wait_ms?, mode?, from?, to?)` | Observe output. `tail` (peek), `since_last` (full increment; also the record of human-takeover commands), or `range` (page an absolute log byte window `[from,to)`; use the `range` returned in a truncated result). |
+| `terminal_read(session_id, wait_ms?, mode?, output_ref?, op?, line_offset?, limit?, pattern?, before?, after?, max_bytes?)` | Observe output. `tail` (peek), `since_last` (full increment; also the record of human-takeover commands), or `explore` (inspect an oversized result referenced by `output_ref` without paging it all: `op=stat` for size/line count, `op=grep` with `pattern`/`before`/`after` to locate, `op=read` with `line_offset`/`limit` — negative `line_offset` reads from the end). |
 | `terminal_control(session_id, key)` | Send control keys (`ctrl-c`, `ctrl-d`, `ctrl-z`, …) or recovery actions (`flush`, `hard`, `rearm`). |
 | `terminal_status(session_id)` | Lightweight state / prompt / exit_code / held query. |
 | `terminal_close(session_id)` | Close the session, reclaim the process group. |
@@ -93,7 +93,7 @@ The agent opens a session, runs commands, and streams back results. If it needs 
 
 ## Configure
 
-Copy `config.example.toml`. Highlights: `listen_addr`, `data_dir`, `default_shell`, `ssh_user`, `ssh_opts`, `shell_switch_commands` (commands that trigger auto re-arm — add your own, e.g. container-enter commands), `auto_rearm`, `max_buffer_bytes` (in-memory tail-cache cap; the full log lives on disk), `exec_output_max_bytes` (per-call return cap; larger results come back as a paging range), `transcript_retention_days`, `log_dir` / `log_rotate` / `log_max_age_days`.
+Copy `config.example.toml`. Highlights: `listen_addr`, `data_dir`, `default_shell`, `ssh_user`, `ssh_opts`, `shell_switch_commands` (commands that trigger auto re-arm — add your own, e.g. container-enter commands), `auto_rearm`, `max_buffer_bytes` (in-memory tail-cache cap; the full log lives on disk), `exec_output_max_bytes` (per-call return cap; larger results come back as an `output_ref` you inspect via `mode=explore`), `explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard` (server-side hard caps for explore results), `transcript_retention_days`, `log_dir` / `log_rotate` / `log_max_age_days`.
 
 **Transparent resource guardrails (`resource_limit_cmd`)**: a model-invisible `ulimit` injected alongside the sentinel at session start, and re-injected on every shell switch (`ssh`/`su`/`docker exec`/`matrix_jail` …) and on `hard` reset. A `ulimit` without `-S/-H` sets both soft and hard limits; the hard limit is inherited by child processes and can't be raised by unprivileged commands, so switching shells or running other commands can't escape the cap:
 

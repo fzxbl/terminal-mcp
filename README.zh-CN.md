@@ -34,7 +34,7 @@ terminal-mcp 把这几件事做到了极致：
 
 - **精确的命令边界。** 哨兵提示符让服务端准确知道命令何时结束、退出码是多少——Agent 绝不会把"还在跑"误当成"已完成"。
 - **切 shell 也不丢。** `ssh`、`su`、`docker exec`、进容器——哨兵自动重新布置，跨层跳转后跟踪依然有效。
-- **对大模型友好的输出。** 剥除 ANSI 转义、暂缓半截转义序列，模型永远不会收到损坏字节。会话日志是磁盘上的 append-only 文件（唯一真相源）+ 有界内存尾部缓存，`cat` 大文件 / `yes` 之类的疯狂输出也顶不爆内存；超大结果以日志区间引用返回、按需分页取回。
+- **对大模型友好的输出。** 剥除 ANSI 转义、暂缓半截转义序列，模型永远不会收到损坏字节。会话日志是磁盘上的 append-only 文件（唯一真相源）+ 有界内存尾部缓存，`cat` 大文件 / `yes` 之类的疯狂输出也顶不爆内存；超大结果以不透明 `output_ref` 返回，按需用 `stat`/`read`/`grep` 探索——模型只取需要的行，而不是把整段翻页搬回来。
 - **本地与远程。** `mode=local` 在宿主机跑 shell/命令；`mode=ssh` 连出去。
 - **审计与回放。** 每次工具调用记为 JSON（调用方 IP、用户、工具、参数、结果）；每个会话的原始字节流存盘可回放，保留时长可配。
 
@@ -85,7 +85,7 @@ Agent 会开会话、跑命令、把结果流式带回。如果它需要输密�
 | --- | --- |
 | `terminal_open(mode, command?, host?)` | 起一个持久 PTY 会话。`mode=local` 或 `mode=ssh`。返回 `session_id` + `terminal_url`。 |
 | `terminal_send(session_id, input, wait_ms?)` | 输入命令并等它稳定，返回输出、状态、退出码。 |
-| `terminal_read(session_id, wait_ms?, mode?, from?, to?)` | 观察输出。`tail`（瞥一眼）、`since_last`（完整增量；也是人工接管命令的记录来源）或 `range`（分页读日志绝对区间 `[from,to)`；用截断结果里回传的 `range` 翻页）。 |
+| `terminal_read(session_id, wait_ms?, mode?, output_ref?, op?, line_offset?, limit?, pattern?, before?, after?, max_bytes?)` | 观察输出。`tail`（瞥一眼）、`since_last`（完整增量；也是人工接管命令的记录来源）或 `explore`（探索截断结果里回传的 `output_ref`，无需整段翻页：`op=stat` 看规模/行数，`op=grep` 用 `pattern`/`before`/`after` 定位，`op=read` 用 `line_offset`/`limit` 取局部——`line_offset` 为负从尾部倒数）。 |
 | `terminal_control(session_id, key)` | 发送控制键（`ctrl-c`、`ctrl-d`、`ctrl-z` …）或恢复动作（`flush`、`hard`、`rearm`）。 |
 | `terminal_status(session_id)` | 轻量查询 状态 / 提示符 / 退出码 / 是否被接管。 |
 | `terminal_close(session_id)` | 关闭会话，回收进程组。 |
@@ -93,7 +93,7 @@ Agent 会开会话、跑命令、把结果流式带回。如果它需要输密�
 
 ## 配置
 
-复制 `config.example.toml`。要点：`listen_addr`、`data_dir`、`default_shell`、`ssh_user`、`ssh_opts`、`shell_switch_commands`（触发自动重新布哨的命令——可自行追加，如进容器命令）、`auto_rearm`、`max_buffer_bytes`（内存尾部缓存上限；完整日志落磁盘）、`exec_output_max_bytes`（单次返回上限；超出以分页区间返回）、`transcript_retention_days`、`log_dir` / `log_rotate` / `log_max_age_days`。
+复制 `config.example.toml`。要点：`listen_addr`、`data_dir`、`default_shell`、`ssh_user`、`ssh_opts`、`shell_switch_commands`（触发自动重新布哨的命令——可自行追加，如进容器命令）、`auto_rearm`、`max_buffer_bytes`（内存尾部缓存上限；完整日志落磁盘）、`exec_output_max_bytes`（单次返回上限；超出以 `output_ref` 返回，用 `mode=explore` 探索）、`explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard`（explore 结果的服务端硬上限）、`transcript_retention_days`、`log_dir` / `log_rotate` / `log_max_age_days`。
 
 **透明资源护栏（`resource_limit_cmd`）**：配一条对模型隐藏的 `ulimit`，随哨兵在会话启动时注入，并在每次切进新一层 shell（`ssh`/`su`/`docker exec`/`matrix_jail` …）与 `hard` reset 时自动重注入。`ulimit` 不带 `-S/-H` 时同时设软硬限，硬限被子进程继承，非特权命令无法调高，故切 shell、跑别的命令都逃不出上限：
 
