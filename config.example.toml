@@ -45,8 +45,8 @@ disable_local_mode = false
 # 回读，不丢失。防止 cat 大文件 / yes 等流式输出把进程内存顶爆。
 # max_buffer_bytes = 8388608
 
-# exec_output_max_bytes（默认 1MiB）：单次 terminal_send/terminal_read 返回给模型的上限。
-# 超过则只回头部预览 + 一个 output_ref（签名 token），用 terminal_read(mode=explore, output_ref, op=stat|grep|read) 探索。
+# exec_output_max_bytes（默认 1MiB）：单次 terminal_send/terminal_output 返回给模型的上限。
+# 超过则只回头部预览 + 一个 output_ref（签名 token），用 terminal_output(mode=explore, output_ref, op=stat|grep|read) 探索。
 # exec_output_max_bytes = 1048576
 
 # explore 服务端硬上限：调用方传入更大值会被 clamp，不能扩大单次 MCP 返回体积。
@@ -79,7 +79,7 @@ disable_local_mode = false
 
 # 工具描述覆盖：按工具名改写对外暴露给模型的 MCP 工具说明（集成到外部 MCP、需按自家话术改写时用）。
 # 缺省或留空的工具沿用内置默认描述。key 取以下工具名之一：
-#   terminal_open / terminal_send / terminal_read / terminal_control /
+#   terminal_open / terminal_send / terminal_output / terminal_control /
 #   terminal_status / terminal_close / terminal_list / terminal_spill_explore
 # [tool_descriptions]
 # terminal_open = "打开一个持久终端会话并返回 session_id 与只读网页终端地址。"

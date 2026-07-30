@@ -85,7 +85,7 @@ The agent opens a session, runs commands, and streams back results. If it needs 
 | --- | --- |
 | `terminal_open(mode, command?, host?)` | Start a persistent PTY session. `mode=local` or `mode=ssh`. Returns `session_id` + `terminal_url`. |
 | `terminal_send(session_id, input, wait_ms?)` | Type a command, wait for it to settle. Returns output, state, exit_code. |
-| `terminal_read(session_id, wait_ms?, mode?)` | Observe live output. `tail` (peek at the screen; doesn't advance the cursor) or `since_last` (full increment since last call; advances the cursor; also the record of human-takeover commands). |
+| `terminal_output(session_id, wait_ms?, mode?)` | Observe live output. `tail` (peek at the screen; doesn't advance the cursor) or `since_last` (full increment since last call; advances the cursor; also the record of human-takeover commands). |
 | `terminal_explore(session_id, output_ref, op, line_offset?, limit?, pattern?, before?, after?, max_bytes?, byte_offset?)` | Inspect an oversized result (the `output_ref` returned when `terminal_send`/`since_last` truncates) without paging it all. `op=stat` (size/line count), `op=grep` with `pattern`/`before`/`after` to locate, `op=read` with `line_offset`/`limit` (negative `line_offset` reads from the end). Read-only; doesn't advance the cursor. |
 | `terminal_control(session_id, key)` | Send control keys (`ctrl-c`, `ctrl-d`, `ctrl-z`, …) or recovery actions (`flush`, `hard`, `rearm`). |
 | `terminal_status(session_id)` | Lightweight state / prompt / exit_code / held query. |

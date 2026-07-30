@@ -31,7 +31,7 @@ type sendInput struct {
 	WaitMs    int    `json:"wait_ms,omitempty" jsonschema:"max milliseconds to block waiting for the command to settle (default 30000, capped by server max_block_seconds)"`
 }
 
-type readInput struct {
+type outputInput struct {
 	SessionID string `json:"session_id" jsonschema:"the session id"`
 	WaitMs    int    `json:"wait_ms,omitempty" jsonschema:"max milliseconds to wait before returning (default 0)"`
 	Mode      string `json:"mode,omitempty" jsonschema:"\"tail\" (default: peek at the tail to judge if the command finished; does NOT advance the cursor) or \"since_last\" (deliver every new byte since the last since_last and advance the cursor)"`
@@ -67,27 +67,27 @@ type listOutput struct {
 }
 
 // 工具描述（英文）。涵盖 PTY 会话、local/ssh 模式、
-// 人工接管 held 语义、read 的 tail vs since_last 差异等关键指引。
+// 人工接管 held 语义、output 的 tail vs since_last 差异等关键指引。
 const (
 	descOpen = "Start a persistent real PTY session and return {session_id, state, terminal_url}. " +
 		"mode=local spawns a shell (or the given command) on this host; mode=ssh opens 'ssh <host>' running bash (host is required). " +
 		"The session starts in state=loading; poll terminal_status until it becomes idle before interacting. " +
 		"terminal_url is a read-only web terminal a human can open to watch the session live, and optionally 'take over' to type commands manually. " +
-		"While a human has taken over, the session returns held=true and the model's send/close/control are blocked; use terminal_read(mode=since_last) to observe what the human is doing."
+		"While a human has taken over, the session returns held=true and the model's send/close/control are blocked; use terminal_output(mode=since_last) to observe what the human is doing."
 
 	descSend = "Type a command into the session and block up to wait_ms (capped by max_block_seconds) for it to settle. " +
 		"Returns this command's new output plus state (running/idle/dead), prompt and exit_code. " +
-		"state=running means the command has not finished yet (e.g. a large core still loading) - keep polling with terminal_read. " +
+		"state=running means the command has not finished yet (e.g. a large core still loading) - keep polling with terminal_output. " +
 		"If the output is too large the return is truncated: truncated=true and an output_ref is returned and this output already advanced the delivery cursor; use terminal_explore (op=stat/grep/read) to inspect it selectively; you can continue running commands afterwards. " +
-		"If held=true the session is under human takeover: this call was NOT executed, do not retry write operations; wait or do other work and watch with terminal_read(mode=since_last) until held clears."
+		"If held=true the session is under human takeover: this call was NOT executed, do not retry write operations; wait or do other work and watch with terminal_output(mode=since_last) until held clears."
 
-	descRead = "Observe session output without relying on injected markers. Two modes, do not mix them to 'fetch everything':\n" +
+	descOutput = "Observe session output without relying on injected markers. Two modes, do not mix them to 'fetch everything':\n" +
 		"mode=tail (default, 'a quick glance'): returns only the last ~tail_bytes of the current screen to judge whether the command finished (check state and prompt). It does NOT advance the since_last cursor and can be called repeatedly.\n" +
 		"mode=since_last ('fetch the complete increment'): returns every new byte since the previous since_last call, losing nothing, and advances the delivery cursor. If a single increment is too large the return is truncated (truncated=true + output_ref) and the cursor has already advanced past it; inspect it with terminal_explore.\n" +
 		"Correct way to fetch a full result: poll with tail until state=idle, then read with since_last.\n" +
 		"To see what a human did during takeover you MUST use mode=since_last: it reconstructs every command the human typed as \"[rc=n] $ command\" (with exit code) together with its output. held=true means a human is currently in control."
 
-	descExplore = "Read-only exploration of an oversized result referenced by output_ref (returned by terminal_send / terminal_read when a single output exceeds the size cap). " +
+	descExplore = "Read-only exploration of an oversized result referenced by output_ref (returned by terminal_send / terminal_output when a single output exceeds the size cap). " +
 		"It inspects a fixed snapshot and does NOT advance the since_last cursor; the next since_last will NOT re-return this result. " +
 		"Do NOT read the whole result sequentially into context: first op=stat (size_bytes/line_count/max_line_bytes), then op=grep (pattern + before/after context) to locate, then op=read a local slice (line_offset 0-based, limit lines; a negative line_offset reads from the end; byte_offset continues a long-line read using the byte_offset from the previous read). " +
 		"Errors are usually at the end - use op=read with a negative line_offset. pattern is a Go regular expression; max_bytes is clamped to the server cap."
@@ -103,7 +103,7 @@ const (
 
 	descStatus = "Lightweight status query (empty output). Returns state, prompt, exit_code and held. " +
 		"held=true means a human has taken over: the model should pause write operations and only read until held becomes false; " +
-		"use terminal_read(mode=since_last) to see what the human executed."
+		"use terminal_output(mode=since_last) to see what the human executed."
 
 	descClose = "Close the session, releasing its child process and concurrency slot. " +
 		"If held=true the session is under human takeover: this call was NOT executed; wait until held clears."
@@ -116,7 +116,7 @@ const (
 var defaultDescriptions = map[string]string{
 	"terminal_open":    descOpen,
 	"terminal_send":    descSend,
-	"terminal_read":    descRead,
+	"terminal_output":  descOutput,
 	"terminal_explore": descExplore,
 	"terminal_control": descControl,
 	"terminal_status":  descStatus,
@@ -197,16 +197,16 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 			return nil, env, nil
 		})
 
-	mcp.AddTool(server, &mcp.Tool{Name: "terminal_read", Description: resolveDesc("terminal_read")},
-		func(_ context.Context, req *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, session.Envelope, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "terminal_output", Description: resolveDesc("terminal_output")},
+		func(_ context.Context, req *mcp.CallToolRequest, in outputInput) (*mcp.CallToolResult, session.Envelope, error) {
 			owner, ok := ownerSig(req)
 			if !ok || !authorizeOwner(owner, in.SessionID) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
-				logEnv(a, req, "terminal_read", map[string]any{"session_id": in.SessionID, "wait_ms": in.WaitMs, "mode": in.Mode}, env)
+				logEnv(a, req, "terminal_output", map[string]any{"session_id": in.SessionID, "wait_ms": in.WaitMs, "mode": in.Mode}, env)
 				return nil, env, nil
 			}
 			env := session.Read(in.SessionID, session.ReadArgs{Mode: in.Mode, WaitMs: in.WaitMs})
-			logEnv(a, req, "terminal_read", map[string]any{
+			logEnv(a, req, "terminal_output", map[string]any{
 				"session_id": in.SessionID, "wait_ms": in.WaitMs, "mode": in.Mode,
 			}, env)
 			return nil, env, nil

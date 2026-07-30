@@ -85,7 +85,7 @@ Agent 会开会话、跑命令、把结果流式带回。如果它需要输密�
 | --- | --- |
 | `terminal_open(mode, command?, host?)` | 起一个持久 PTY 会话。`mode=local` 或 `mode=ssh`。返回 `session_id` + `terminal_url`。 |
 | `terminal_send(session_id, input, wait_ms?)` | 输入命令并等它稳定，返回输出、状态、退出码。 |
-| `terminal_read(session_id, wait_ms?, mode?)` | 观察实时输出。`tail`（瞥一眼当前屏，不推进游标）或 `since_last`（上次以来的完整增量，推进游标；也是人工接管命令的记录来源）。 |
+| `terminal_output(session_id, wait_ms?, mode?)` | 观察实时输出。`tail`（瞥一眼当前屏，不推进游标）或 `since_last`（上次以来的完整增量，推进游标；也是人工接管命令的记录来源）。 |
 | `terminal_explore(session_id, output_ref, op, line_offset?, limit?, pattern?, before?, after?, max_bytes?, byte_offset?)` | 探索超大结果（`terminal_send`/`since_last` 截断时回传的 `output_ref`），无需整段翻页：`op=stat` 看规模/行数，`op=grep` 用 `pattern`/`before`/`after` 定位，`op=read` 用 `line_offset`/`limit` 取局部（`line_offset` 为负从尾部倒数）。只读，不推进游标。 |
 | `terminal_control(session_id, key)` | 发送控制键（`ctrl-c`、`ctrl-d`、`ctrl-z` …）或恢复动作（`flush`、`hard`、`rearm`）。 |
 | `terminal_status(session_id)` | 轻量查询 状态 / 提示符 / 退出码 / 是否被接管。 |

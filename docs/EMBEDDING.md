@@ -113,7 +113,7 @@ tool), you must register the terminal tools' risk explicitly, e.g.:
 
 - `terminal_open` / `terminal_send` / `terminal_control` → write, high
 - `terminal_close` → write, medium
-- `terminal_read` / `terminal_status` / `terminal_list` → read, low
+- `terminal_output` / `terminal_status` / `terminal_list` → read, low
 
 ## Configuration reference
 
@@ -135,7 +135,7 @@ Passed to `Init(configPath)`; TOML. All fields optional (sensible defaults).
 | `idle_ttl_minutes` | `30` | Idle session GC timeout. |
 | `transcript_retention_days` | `7` | How long `.raw` transcripts are kept. |
 | `max_buffer_bytes` | `8388608` (8 MiB) | In-memory tail-cache cap per session. The full session output is an append-only `.raw` log on disk (source of truth); memory keeps only the last this-many bytes and older bytes are read back from disk on demand. Bounds memory against runaway streaming output. |
-| `exec_output_max_bytes` | `1048576` (1 MiB) | Per-call return cap for `terminal_send`/`terminal_read`. Larger results come back truncated with a `range` `{from,to}`; page them with `terminal_read(mode=range, from, to)`. |
+| `exec_output_max_bytes` | `1048576` (1 MiB) | Per-call return cap for `terminal_send`/`terminal_output`. Larger results come back truncated with a `range` `{from,to}`; page them with `terminal_output(mode=range, from, to)`. |
 | `log_dir` | `log` | Audit + runtime log directory. |
 | `log_rotate` | `daily` | `daily` or `hourly` (time-based, not size-based). |
 | `log_max_age_days` | `30` | Rotated-log retention. |

@@ -53,7 +53,7 @@ type Config struct {
 	AutoRearm bool `toml:"auto_rearm"`
 
 	// ToolDescriptions 允许按工具名覆盖 MCP 工具的对外描述（key 为工具名，如 terminal_open/terminal_send/
-	// terminal_read/terminal_control/terminal_status/terminal_close/terminal_list）。
+	// terminal_output/terminal_control/terminal_status/terminal_close/terminal_list）。
 	// 缺省或空串的条目沿用内置默认描述；集成到外部 MCP、需要按自家话术改写工具说明时用它。
 	ToolDescriptions map[string]string `toml:"tool_descriptions"`
 
@@ -74,7 +74,7 @@ type Config struct {
 	// 边界（诚实告知）：ulimit 无法约束「提权到 root 后主动调高自身硬限」，也无法约束「由守护进程另起、
 	// 不继承本会话的进程树」（如 docker run 经 dockerd 拉起的容器）。要对本机进程树做与权限无关的强约束，
 	// 应改用 cgroup v2（memory.max/pids.max/cpu.max）把 PTY 首进程整棵树关进 cgroup——本字段不覆盖该场景。
-	// 注入内容与哨兵同属布哨噪声，被 since_last 游标跳过，模型侧 terminal_read 看不到。
+	// 注入内容与哨兵同属布哨噪声，被 since_last 游标跳过，模型侧 terminal_output 看不到。
 	ResourceLimitCmd string `toml:"resource_limit_cmd"`
 
 	// DisableLocalMode 是「可选」加固，默认 false。为 true 时禁止 mode=local 开会话（terminal_open 直接

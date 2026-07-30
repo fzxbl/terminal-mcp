@@ -104,7 +104,7 @@ log.Fatal(http.ListenAndServe(":8900", h))
 
 - `terminal_open` / `terminal_send` / `terminal_control` → 写，high
 - `terminal_close` → 写，medium
-- `terminal_read` / `terminal_status` / `terminal_list` → 读，low
+- `terminal_output` / `terminal_status` / `terminal_list` → 读，low
 
 ## 配置参考
 
@@ -126,7 +126,7 @@ log.Fatal(http.ListenAndServe(":8900", h))
 | `idle_ttl_minutes` | `30` | 空闲会话 GC 超时。 |
 | `transcript_retention_days` | `7` | `.raw` transcript 保留天数。 |
 | `max_buffer_bytes` | `8388608`（8 MiB） | 每会话内存尾部缓存上限。会话完整输出是磁盘上的 append-only `.raw` 日志（唯一真相源），内存只保留最近这么多字节，更早内容按需从磁盘回读，防止流式输出把内存顶爆。 |
-| `exec_output_max_bytes` | `1048576`（1 MiB） | 单次 `terminal_send`/`terminal_read` 返回上限。超出则截断并回传区间 `range{from,to}`，用 `terminal_read(mode=range, from, to)` 分页取。 |
+| `exec_output_max_bytes` | `1048576`（1 MiB） | 单次 `terminal_send`/`terminal_output` 返回上限。超出则截断并回传区间 `range{from,to}`，用 `terminal_output(mode=range, from, to)` 分页取。 |
 | `log_dir` | `log` | 审计 + 运行日志目录。 |
 | `log_rotate` | `daily` | `daily` 或 `hourly`（按时间切割，非按大小）。 |
 | `log_max_age_days` | `30` | 切割日志保留天数。 |

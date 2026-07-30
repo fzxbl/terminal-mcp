@@ -29,7 +29,7 @@ func TestRegisterToolsSchemas(t *testing.T) {
 }
 
 // TestExploreToolSchemaSplit 校验 explore 已拆成独立工具：terminal_explore 的输入 schema
-// 含 output_ref/op，而 terminal_read 的 schema 不再含 output_ref/op/pattern。
+// 含 output_ref/op，而 terminal_output 的 schema 不再含 output_ref/op/pattern。
 func TestExploreToolSchemaSplit(t *testing.T) {
 	ctx := context.Background()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "terminal-mcp-test", Version: "test"}, nil)
@@ -69,13 +69,13 @@ func TestExploreToolSchemaSplit(t *testing.T) {
 		}
 	}
 
-	rd, ok := schemas["terminal_read"]
+	rd, ok := schemas["terminal_output"]
 	if !ok {
-		t.Fatalf("terminal_read not registered")
+		t.Fatalf("terminal_output not registered")
 	}
 	for _, f := range []string{"output_ref", "op", "pattern"} {
 		if strings.Contains(rd, `"`+f+`":`) {
-			t.Fatalf("terminal_read schema should no longer contain %q: %s", f, rd)
+			t.Fatalf("terminal_output schema should no longer contain %q: %s", f, rd)
 		}
 	}
 }
