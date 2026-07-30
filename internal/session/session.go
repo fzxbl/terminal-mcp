@@ -28,7 +28,7 @@ type Envelope struct {
 	Error           string         `json:"error,omitempty"`
 }
 
-// ExploreResult 是 mode=explore 的导航元数据；正文继续放在 Envelope.Output。
+// ExploreResult 是 explore 的导航元数据；正文继续放在 Envelope.Output。
 type ExploreResult struct {
 	Op             string `json:"op"`
 	SizeBytes      int64  `json:"size_bytes,omitempty"`
@@ -245,23 +245,14 @@ func sendWithRearm(sess *Session, proc *pty.ProcSession, input string, start int
 	return finalizeScope(out, start, armStart, state, prompt, code, input, false)
 }
 
-// ReadArgs 承载 explore 的全部可选参数，避免 Read 参数爆炸。
+// ReadArgs 承载 tail/since_last 的可选参数。explore 已拆到独立的 ExploreArgs/Explore。
 type ReadArgs struct {
-	Mode       string
-	WaitMs     int
-	OutputRef  string
-	Op         string
-	LineOffset int
-	ByteOffset int
-	Limit      int
-	Pattern    string
-	Before     int
-	After      int
-	MaxBytes   int
+	Mode   string
+	WaitMs int
 }
 
-// Read 观察输出。mode=tail：立即取尾部窗口；mode=since_last：取交付游标之后；
-// mode=explore：按 output_ref 在固定区间内做 stat/read/grep 探索（不推进 since_last 游标）。
+// Read 观察输出。mode=tail：立即取尾部窗口；mode=since_last：取交付游标之后。
+// explore（按 output_ref 在固定区间内 stat/read/grep 探索）已拆到独立的 Explore 入口。
 func Read(id string, a ReadArgs) Envelope {
 	sess := theStore.get(id)
 	if sess == nil {
@@ -272,11 +263,8 @@ func Read(id string, a ReadArgs) Envelope {
 		return Envelope{State: "dead", Error: "no live process"}
 	}
 	sess.touch()
-	if a.WaitMs > 0 && a.Mode != "explore" {
+	if a.WaitMs > 0 {
 		waitSettled(proc, time.Now().Add(capBlock(a.WaitMs, 500)))
-	}
-	if a.Mode == "explore" {
-		return doExplore(proc, a)
 	}
 	state, prompt, code := computeState(sess)
 	heldNow := sess.held()
@@ -332,9 +320,36 @@ func Read(id string, a ReadArgs) Envelope {
 	return env
 }
 
+// ExploreArgs 承载 explore 的全部参数（stat/read/grep）。
+type ExploreArgs struct {
+	OutputRef  string
+	Op         string
+	LineOffset int
+	ByteOffset int
+	Limit      int
+	Pattern    string
+	Before     int
+	After      int
+	MaxBytes   int
+}
+
+// Explore 在 output_ref 指向的固定区间内做 stat/read/grep 探索（只读，不推进 since_last 游标）。
+func Explore(id string, a ExploreArgs) Envelope {
+	sess := theStore.get(id)
+	if sess == nil {
+		return Envelope{State: "dead", Error: "session not found: " + id}
+	}
+	proc := sess.getProc()
+	if proc == nil {
+		return Envelope{State: "dead", Error: "no live process"}
+	}
+	sess.touch()
+	return doExplore(proc, a)
+}
+
 // normExplore 收敛 explore 参数：调用方值 <=0 取「软默认」，>0 则 clamp 到「硬上限」。
 // before/after 独立处理：负值归 0，>硬上限归硬上限，0 保持 0（不套默认）。
-func normExplore(a *ReadArgs) {
+func normExplore(a *ExploreArgs) {
 	c := config.Get()
 	if a.MaxBytes <= 0 {
 		a.MaxBytes = int(c.ExploreMaxBytesDefault)
@@ -368,7 +383,7 @@ func normExplore(a *ReadArgs) {
 }
 
 // doExplore 在 output_ref 指向的固定区间内做 stat/read/grep；只读，不推进 since_last 游标。
-func doExplore(proc *pty.ProcSession, a ReadArgs) Envelope {
+func doExplore(proc *pty.ProcSession, a ExploreArgs) Envelope {
 	sc, err := outputref.Parse(a.OutputRef)
 	if err != nil {
 		return Envelope{State: "idle", Error: "invalid output_ref: " + err.Error()}
@@ -556,7 +571,7 @@ func finalizeScope(output string, from, to int64, state, prompt string, code *in
 		if len(preview) > previewMax {
 			preview = preview[:previewMax]
 		}
-		env.Output = fmt.Sprintf("%s\n[输出 %d 字节超过上限，仅显示头部；用 terminal_read(mode=explore, output_ref=..., op=stat|grep|read) 探索完整内容]", preview, to-from)
+		env.Output = fmt.Sprintf("%s\n[输出 %d 字节超过上限，仅显示头部；用 terminal_explore(output_ref=..., op=stat|grep|read) 探索完整内容]", preview, to-from)
 		env.OutputRef = outputref.Sign(outputref.Scope{From: from, To: to, Input: input, Observe: observe})
 		env.OutputSizeBytes = to - from
 		env.Truncated = true
@@ -612,8 +627,10 @@ func execLocal(r sessionReq) Envelope {
 	case "send":
 		return Send(r.SessionID, r.Input, r.WaitMs)
 	case "read":
-		return Read(r.SessionID, ReadArgs{
-			Mode: r.Mode, WaitMs: r.WaitMs, OutputRef: r.OutputRef, Op: r.ExploreOp,
+		return Read(r.SessionID, ReadArgs{Mode: r.Mode, WaitMs: r.WaitMs})
+	case "explore":
+		return Explore(r.SessionID, ExploreArgs{
+			OutputRef: r.OutputRef, Op: r.ExploreOp,
 			LineOffset: r.LineOffset, ByteOffset: r.ByteOffset, Limit: r.Limit, Pattern: r.Pattern,
 			Before: r.Before, After: r.After, MaxBytes: r.MaxBytes,
 		})

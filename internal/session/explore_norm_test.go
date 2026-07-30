@@ -10,7 +10,7 @@ import (
 func TestNormExploreUsesDefaults(t *testing.T) {
 	c := config.Load("")
 
-	read := ReadArgs{Op: "read"}
+	read := ExploreArgs{Op: "read"}
 	normExplore(&read)
 	if read.MaxBytes != int(c.ExploreMaxBytesDefault) {
 		t.Fatalf("read MaxBytes=%d, want default %d", read.MaxBytes, c.ExploreMaxBytesDefault)
@@ -19,7 +19,7 @@ func TestNormExploreUsesDefaults(t *testing.T) {
 		t.Fatalf("read Limit=%d, want default %d", read.Limit, c.ExploreReadLimitDefault)
 	}
 
-	grep := ReadArgs{Op: "grep"}
+	grep := ExploreArgs{Op: "grep"}
 	normExplore(&grep)
 	if grep.Limit != c.ExploreGrepLimitDefault {
 		t.Fatalf("grep Limit=%d, want default %d", grep.Limit, c.ExploreGrepLimitDefault)
@@ -30,7 +30,7 @@ func TestNormExploreUsesDefaults(t *testing.T) {
 	}
 
 	// >0 的值 clamp 到硬上限。
-	big := ReadArgs{Op: "read", MaxBytes: 1 << 30, Limit: 1 << 20}
+	big := ExploreArgs{Op: "read", MaxBytes: 1 << 30, Limit: 1 << 20}
 	normExplore(&big)
 	if int64(big.MaxBytes) != c.ExploreMaxBytesHard {
 		t.Fatalf("big MaxBytes=%d, want hard %d", big.MaxBytes, c.ExploreMaxBytesHard)

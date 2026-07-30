@@ -32,18 +32,22 @@ type sendInput struct {
 }
 
 type readInput struct {
+	SessionID string `json:"session_id" jsonschema:"the session id"`
+	WaitMs    int    `json:"wait_ms,omitempty" jsonschema:"max milliseconds to wait before returning (default 0)"`
+	Mode      string `json:"mode,omitempty" jsonschema:"\"tail\" (default: peek at the tail to judge if the command finished; does NOT advance the cursor) or \"since_last\" (deliver every new byte since the last since_last and advance the cursor)"`
+}
+
+type exploreInput struct {
 	SessionID  string `json:"session_id" jsonschema:"the session id"`
-	WaitMs     int    `json:"wait_ms,omitempty" jsonschema:"max milliseconds to wait before returning (tail/since_last only; default 0)"`
-	Mode       string `json:"mode,omitempty" jsonschema:"\"tail\" (default: peek at the tail to judge if the command finished; does NOT advance the cursor), \"since_last\" (deliver every new byte since the last since_last and advance the cursor), or \"explore\" (read-only exploration of an oversized result referenced by output_ref; does NOT advance the cursor)"`
-	OutputRef  string `json:"output_ref,omitempty" jsonschema:"explore mode: the opaque reference returned in a truncated result"`
-	Op         string `json:"op,omitempty" jsonschema:"explore mode: stat | read | grep"`
-	LineOffset int    `json:"line_offset,omitempty" jsonschema:"explore read/grep start logical line (0-based; read accepts negative to count from the end)"`
-	ByteOffset int    `json:"byte_offset,omitempty" jsonschema:"explore read: intra-line byte cursor for continuing a long-line read (use the byte_offset returned by the previous read)"`
-	Limit      int    `json:"limit,omitempty" jsonschema:"explore: max lines (read) or max matches (grep)"`
-	Pattern    string `json:"pattern,omitempty" jsonschema:"explore grep: Go regular expression"`
-	Before     int    `json:"before,omitempty" jsonschema:"explore grep: context lines before each match"`
-	After      int    `json:"after,omitempty" jsonschema:"explore grep: context lines after each match"`
-	MaxBytes   int    `json:"max_bytes,omitempty" jsonschema:"explore: desired max body bytes (clamped to server hard cap)"`
+	OutputRef  string `json:"output_ref" jsonschema:"the opaque reference returned in a truncated result"`
+	Op         string `json:"op" jsonschema:"stat | read | grep"`
+	LineOffset int    `json:"line_offset,omitempty" jsonschema:"read/grep start logical line (0-based; read accepts negative to count from the end)"`
+	ByteOffset int    `json:"byte_offset,omitempty" jsonschema:"read: intra-line byte cursor for continuing a long-line read (use the byte_offset returned by the previous read)"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"max lines (read) or max matches (grep)"`
+	Pattern    string `json:"pattern,omitempty" jsonschema:"grep: Go regular expression"`
+	Before     int    `json:"before,omitempty" jsonschema:"grep: context lines before each match"`
+	After      int    `json:"after,omitempty" jsonschema:"grep: context lines after each match"`
+	MaxBytes   int    `json:"max_bytes,omitempty" jsonschema:"desired max body bytes (clamped to server hard cap)"`
 }
 
 type controlInput struct {
@@ -74,15 +78,19 @@ const (
 	descSend = "Type a command into the session and block up to wait_ms (capped by max_block_seconds) for it to settle. " +
 		"Returns this command's new output plus state (running/idle/dead), prompt and exit_code. " +
 		"state=running means the command has not finished yet (e.g. a large core still loading) - keep polling with terminal_read. " +
-		"If the output is too large the return is truncated: truncated=true and an output_ref is returned, and that output has ALREADY advanced the delivery cursor; use terminal_read(mode=explore) with op=stat/grep/read to inspect it selectively. You can continue running commands afterwards. " +
+		"If the output is too large the return is truncated: truncated=true and an output_ref is returned and this output already advanced the delivery cursor; use terminal_explore (op=stat/grep/read) to inspect it selectively; you can continue running commands afterwards. " +
 		"If held=true the session is under human takeover: this call was NOT executed, do not retry write operations; wait or do other work and watch with terminal_read(mode=since_last) until held clears."
 
-	descRead = "Observe session output without relying on injected markers. Three modes, do not mix them to 'fetch everything':\n" +
+	descRead = "Observe session output without relying on injected markers. Two modes, do not mix them to 'fetch everything':\n" +
 		"mode=tail (default, 'a quick glance'): returns only the last ~tail_bytes of the current screen to judge whether the command finished (check state and prompt). It does NOT advance the since_last cursor and can be called repeatedly.\n" +
-		"mode=since_last ('fetch the complete increment'): returns every new byte since the previous since_last call, losing nothing, and advances the delivery cursor. If a single increment is too large the return is truncated (truncated=true + output_ref) and the cursor has already advanced past it.\n" +
-		"mode=explore ('inspect an oversized result'): read-only exploration of the fixed snapshot referenced by output_ref; does NOT advance the cursor. Do NOT read the whole result sequentially into context: first op=stat (size/line_count/max_line_bytes), then op=grep (pattern, before/after) to locate, then op=read a local slice (line_offset, limit). Errors are usually at the end - use op=read with a negative line_offset. The next since_last will NOT re-return the output_ref result.\n" +
+		"mode=since_last ('fetch the complete increment'): returns every new byte since the previous since_last call, losing nothing, and advances the delivery cursor. If a single increment is too large the return is truncated (truncated=true + output_ref) and the cursor has already advanced past it; inspect it with terminal_explore.\n" +
 		"Correct way to fetch a full result: poll with tail until state=idle, then read with since_last.\n" +
 		"To see what a human did during takeover you MUST use mode=since_last: it reconstructs every command the human typed as \"[rc=n] $ command\" (with exit code) together with its output. held=true means a human is currently in control."
+
+	descExplore = "Read-only exploration of an oversized result referenced by output_ref (returned by terminal_send / terminal_read when a single output exceeds the size cap). " +
+		"It inspects a fixed snapshot and does NOT advance the since_last cursor; the next since_last will NOT re-return this result. " +
+		"Do NOT read the whole result sequentially into context: first op=stat (size_bytes/line_count/max_line_bytes), then op=grep (pattern + before/after context) to locate, then op=read a local slice (line_offset 0-based, limit lines; a negative line_offset reads from the end; byte_offset continues a long-line read using the byte_offset from the previous read). " +
+		"Errors are usually at the end - use op=read with a negative line_offset. pattern is a Go regular expression; max_bytes is clamped to the server cap."
 
 	descControl = "Send a control key to the session, or perform a recovery action. " +
 		"Control keys are written to the PTY as raw control bytes and work even while a command is running: " +
@@ -109,6 +117,7 @@ var defaultDescriptions = map[string]string{
 	"terminal_open":    descOpen,
 	"terminal_send":    descSend,
 	"terminal_read":    descRead,
+	"terminal_explore": descExplore,
 	"terminal_control": descControl,
 	"terminal_status":  descStatus,
 	"terminal_close":   descClose,
@@ -150,7 +159,7 @@ func resolveDesc(name string) string {
 	return defaultDescriptions[name]
 }
 
-// registerTools 在给定 server 上注册全部 7 个 terminal_* 工具。
+// registerTools 在给定 server 上注册全部 terminal_* 工具。
 // 每个 handler 计算结果后调用 audit.Logger 记录一条审计。CallerIP 从 HTTP 请求头解析
 // （官方 SDK 通过 CallToolRequest.Extra.Header 把 HTTP header 透传给每个工具 handler）。
 func registerTools(server *mcp.Server, a *audit.Logger) {
@@ -196,14 +205,28 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 				logEnv(a, req, "terminal_read", map[string]any{"session_id": in.SessionID, "wait_ms": in.WaitMs, "mode": in.Mode}, env)
 				return nil, env, nil
 			}
-			env := session.Read(in.SessionID, session.ReadArgs{
-				Mode: in.Mode, WaitMs: in.WaitMs, OutputRef: in.OutputRef, Op: in.Op,
+			env := session.Read(in.SessionID, session.ReadArgs{Mode: in.Mode, WaitMs: in.WaitMs})
+			logEnv(a, req, "terminal_read", map[string]any{
+				"session_id": in.SessionID, "wait_ms": in.WaitMs, "mode": in.Mode,
+			}, env)
+			return nil, env, nil
+		})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "terminal_explore", Description: resolveDesc("terminal_explore")},
+		func(_ context.Context, req *mcp.CallToolRequest, in exploreInput) (*mcp.CallToolResult, session.Envelope, error) {
+			owner, ok := ownerSig(req)
+			if !ok || !authorizeOwner(owner, in.SessionID) {
+				env := session.Envelope{State: "dead", Error: "session not found"}
+				logEnv(a, req, "terminal_explore", map[string]any{"session_id": in.SessionID, "op": in.Op, "output_ref": in.OutputRef}, env)
+				return nil, env, nil
+			}
+			env := session.Explore(in.SessionID, session.ExploreArgs{
+				OutputRef: in.OutputRef, Op: in.Op,
 				LineOffset: in.LineOffset, ByteOffset: in.ByteOffset, Limit: in.Limit, Pattern: in.Pattern,
 				Before: in.Before, After: in.After, MaxBytes: in.MaxBytes,
 			})
-			logEnv(a, req, "terminal_read", map[string]any{
-				"session_id": in.SessionID, "wait_ms": in.WaitMs, "mode": in.Mode,
-				"op": in.Op, "output_ref": in.OutputRef,
+			logEnv(a, req, "terminal_explore", map[string]any{
+				"session_id": in.SessionID, "op": in.Op, "output_ref": in.OutputRef,
 			}, env)
 			return nil, env, nil
 		})

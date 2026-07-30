@@ -320,7 +320,7 @@ func TestResourceLimitInjectedAndInheritedUnescapable(t *testing.T) {
 }
 
 // TestReadExploreStatReadGrep 校验：单次输出超过 exec_output_max_bytes 时返回 output_ref，
-// 且用 mode=explore 的 stat/grep/read 能在该固定区间内探索完整内容。
+// 且用 Explore 的 stat/grep/read 能在该固定区间内探索完整内容。
 func TestReadExploreStatReadGrep(t *testing.T) {
 	id := openLocalReady(t)
 	defer Close(id)
@@ -334,15 +334,15 @@ func TestReadExploreStatReadGrep(t *testing.T) {
 	}
 	ref := env.OutputRef
 
-	st := Read(id, ReadArgs{Mode: "explore", OutputRef: ref, Op: "stat"})
+	st := Explore(id, ExploreArgs{OutputRef: ref, Op: "stat"})
 	if st.Explore == nil || st.Explore.LineCount < 60 {
 		t.Fatalf("stat=%+v", st.Explore)
 	}
-	g := Read(id, ReadArgs{Mode: "explore", OutputRef: ref, Op: "grep", Pattern: "line-42"})
+	g := Explore(id, ExploreArgs{OutputRef: ref, Op: "grep", Pattern: "line-42"})
 	if !strings.Contains(g.Output, "line-42") {
 		t.Fatalf("grep out=%q", g.Output)
 	}
-	rd := Read(id, ReadArgs{Mode: "explore", OutputRef: ref, Op: "read", LineOffset: -1})
+	rd := Explore(id, ExploreArgs{OutputRef: ref, Op: "read", LineOffset: -1})
 	if strings.TrimSpace(rd.Output) == "" {
 		t.Fatalf("read tail empty: %+v", rd)
 	}
@@ -360,7 +360,7 @@ func TestExploreDoesNotAdvanceDelivered(t *testing.T) {
 		t.Fatalf("expected oversized")
 	}
 	d1 := theStore.get(id).delivered()
-	Read(id, ReadArgs{Mode: "explore", OutputRef: env.OutputRef, Op: "stat"})
+	Explore(id, ExploreArgs{OutputRef: env.OutputRef, Op: "stat"})
 	d2 := theStore.get(id).delivered()
 	if d1 != d2 {
 		t.Fatalf("explore advanced delivered: %d -> %d", d1, d2)
@@ -371,7 +371,7 @@ func TestExploreDoesNotAdvanceDelivered(t *testing.T) {
 func TestExploreBadRefErrors(t *testing.T) {
 	id := openLocalReady(t)
 	defer Close(id)
-	env := Read(id, ReadArgs{Mode: "explore", OutputRef: "bogus.token", Op: "stat"})
+	env := Explore(id, ExploreArgs{OutputRef: "bogus.token", Op: "stat"})
 	if env.Error == "" {
 		t.Fatalf("expected error for bad ref")
 	}

@@ -1,8 +1,11 @@
 package mcpserver
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -23,6 +26,58 @@ func TestRegisterToolsSchemas(t *testing.T) {
 	}()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "terminal-mcp-test", Version: "test"}, nil)
 	registerTools(srv, audit.New(io.Discard))
+}
+
+// TestExploreToolSchemaSplit 校验 explore 已拆成独立工具：terminal_explore 的输入 schema
+// 含 output_ref/op，而 terminal_read 的 schema 不再含 output_ref/op/pattern。
+func TestExploreToolSchemaSplit(t *testing.T) {
+	ctx := context.Background()
+	srv := mcp.NewServer(&mcp.Implementation{Name: "terminal-mcp-test", Version: "test"}, nil)
+	registerTools(srv, audit.New(io.Discard))
+
+	ct, st := mcp.NewInMemoryTransports()
+	ss, err := srv.Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	defer ss.Close()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	cs, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer cs.Close()
+
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	schemas := map[string]string{}
+	for _, tl := range res.Tools {
+		b, _ := json.Marshal(tl.InputSchema)
+		schemas[tl.Name] = string(b)
+	}
+
+	exp, ok := schemas["terminal_explore"]
+	if !ok {
+		t.Fatalf("terminal_explore not registered; tools=%v", schemas)
+	}
+	// 检查 JSON schema 里的属性键（形如 "output_ref":），避免误匹配 "properties" 里的子串。
+	for _, f := range []string{"output_ref", "op", "pattern", "line_offset", "byte_offset"} {
+		if !strings.Contains(exp, `"`+f+`":`) {
+			t.Fatalf("terminal_explore schema missing %q: %s", f, exp)
+		}
+	}
+
+	rd, ok := schemas["terminal_read"]
+	if !ok {
+		t.Fatalf("terminal_read not registered")
+	}
+	for _, f := range []string{"output_ref", "op", "pattern"} {
+		if strings.Contains(rd, `"`+f+`":`) {
+			t.Fatalf("terminal_read schema should no longer contain %q: %s", f, rd)
+		}
+	}
 }
 
 // TestResolveDescOverrides 验证工具描述覆盖的优先级：编程覆盖 > 配置文件 > 内置默认，
