@@ -1,6 +1,10 @@
 // Package textexplore 在固定文本快照内做纯文本探索（stat/read/grep）。
 // 输入为「可重复创建的 io.Reader 工厂」，每次调用从起点重新逐行扫描并清洗，
 // 保证 stat/read/grep 的逻辑行号一致。不依赖 session/oplog/config。
+//
+// 实现为单遍流式：逐条读原始物理行 → clean.LineCleaner 逐行清洗 → 对每条清洗后
+// 逻辑行回调消费。任何算子都不再把全部逻辑行物化进内存（负向 read 仅缓冲窗口、
+// grep 仅缓冲 before 上下文，均为 O(窗口) 而非 O(全部)）。
 package textexplore
 
 import (
@@ -70,53 +74,65 @@ func readLimitedLine(br *bufio.Reader, failOnLongLine bool) (string, error) {
 	}
 }
 
-// cleanLines 从工厂 reader 逐物理行读取，拼回后走一次现有清洗，
-// 与 session 语义完全一致（含首行 echo-strip / observe 还原），再拆成清洗后逻辑行。
-// failOnLongLine=true 时单行超 maxRawLine 立即 errLongLine（grep）；false 时容忍并整行加载（stat/read）。
-func cleanLines(src func() io.Reader, opt Options, failOnLongLine bool) ([]string, error) {
+// eachCleanLine 逐条读原始物理行 → LineCleaner 清洗 → 对每条「清洗后逻辑行」调 fn(idx, line)。
+// idx 从 0 递增；fn 返回 false 提前停止扫描。failOnLongLine=true 时超长行返回 errLongLine（grep 用）。
+//
+// 一次 LineCleaner.Clean 可能返回含 '\n' 的片段（observe 还原、裸 CR 拆行等），因此需按 '\n'
+// 拆开、逐条当作独立逻辑行计数，才能与旧的 strings.Split(CleanOutput(...), "\n") 行集完全一致。
+// LineCleaner 内部已丢弃首部空行、缓冲尾随空行（Flush 为 no-op），无需在此额外 Trim。
+func eachCleanLine(src func() io.Reader, opt Options, failOnLongLine bool, fn func(idx int, line string) bool) error {
 	br := bufio.NewReader(src())
-	var raw []string
+	lc := clean.NewLineCleaner(opt.Input, opt.Observe)
+	idx := 0
+	// emit 拆分清洗片段为逐条逻辑行，返回 false 表示 fn 要求提前停止。
+	emit := func(fragment string) bool {
+		for _, piece := range strings.Split(fragment, "\n") {
+			if !fn(idx, piece) {
+				return false
+			}
+			idx++
+		}
+		return true
+	}
 	for {
 		line, err := readLimitedLine(br, failOnLongLine)
 		if err == errLongLine {
-			return nil, errLongLine
+			return errLongLine
 		}
 		if err == nil {
-			raw = append(raw, line)
+			if frag, keep := lc.Clean(line); keep {
+				if !emit(frag) {
+					return nil
+				}
+			}
 			continue
 		}
 		if err == io.EOF {
 			if line != "" {
-				raw = append(raw, line)
+				if frag, keep := lc.Clean(line); keep {
+					if !emit(frag) {
+						return nil
+					}
+				}
 			}
-			break
+			return nil
 		}
-		return nil, err
+		return err
 	}
-	joined := strings.Join(raw, "\n")
-	var cleaned string
-	if opt.Observe {
-		cleaned = clean.ObserveOrClean(joined, true)
-	} else {
-		cleaned = clean.CleanOutput(joined, opt.Input)
-	}
-	if cleaned == "" {
-		return nil, nil
-	}
-	return strings.Split(cleaned, "\n"), nil
 }
 
-// Stat 返回清洗后行数与最大行字节（SizeBytes 由调用方按原始 scope 长度填充）。
+// Stat 返回清洗后行数与最大行字节（SizeBytes 由调用方按原始 scope 长度填充）。O(1) 内存。
 func Stat(src func() io.Reader, opt Options) (Result, error) {
-	lines, err := cleanLines(src, opt, false)
+	res := Result{Op: "stat"}
+	err := eachCleanLine(src, opt, false, func(_ int, line string) bool {
+		res.LineCount++
+		if len(line) > res.MaxLineBytes {
+			res.MaxLineBytes = len(line)
+		}
+		return true
+	})
 	if err != nil {
 		return Result{Op: "stat"}, err
-	}
-	res := Result{Op: "stat", LineCount: len(lines)}
-	for _, ln := range lines {
-		if len(ln) > res.MaxLineBytes {
-			res.MaxLineBytes = len(ln)
-		}
 	}
 	return res, nil
 }
@@ -124,25 +140,118 @@ func Stat(src func() io.Reader, opt Options) (Result, error) {
 // Read 从 lineOffset（负值从尾部倒数）起读最多 limit 行、正文总字节尽量不超 maxBytes。
 // 若某行本身超 maxBytes，则从 byteOffset 起在行内切一段返回，NextLineOffset 停在本行、ByteOffset 前进。
 func Read(src func() io.Reader, opt Options, lineOffset, byteOffset, limit, maxBytes int) (string, Result, error) {
-	lines, err := cleanLines(src, opt, false)
+	if lineOffset < 0 {
+		return readNegative(src, opt, lineOffset, byteOffset, limit, maxBytes)
+	}
+	return readForward(src, opt, lineOffset, byteOffset, limit, maxBytes)
+}
+
+// readForward 正向 offset 单遍流式：跳过 idx<start，从 idx==start 起收集，受 limit/maxBytes 约束，
+// 收满即提前停。EOF 需知道窗口后是否还有行——多读一行来判定（仍 O(1) 内存）。
+func readForward(src func() io.Reader, opt Options, start, byteOffset, limit, maxBytes int) (string, Result, error) {
+	res := Result{Op: "read"}
+	var out []string
+	used := byteOffset
+	count := 0
+	resolved := false     // 已在回调内确定 NextLineOffset/EOF 并提前停
+	limitReached := false // 已收满 limit，等待判定窗口后是否还有行
+	pendingNext := 0      // limit 收满后的 NextLineOffset 候选（末尾已收行号+1）
+	err := eachCleanLine(src, opt, false, func(idx int, line string) bool {
+		count = idx + 1
+		if idx < start {
+			return true
+		}
+		if limitReached {
+			// 窗口后仍有行：NextLineOffset=收满处，未到末尾。
+			res.NextLineOffset = pendingNext
+			res.EOF = false
+			resolved = true
+			return false
+		}
+		// idx==start 必为首个可收集行（idx 连续递增）。超长行行内字节窗口只作用于起始行。
+		if idx == start && maxBytes > 0 && len(line)-byteOffset > maxBytes {
+			out = append(out, line[byteOffset:byteOffset+maxBytes])
+			res.NextLineOffset = start
+			res.ByteOffset = byteOffset + maxBytes
+			res.Truncated = true
+			resolved = true
+			return false
+		}
+		ln := line
+		if idx == start && byteOffset > 0 {
+			ln = ln[byteOffset:]
+		}
+		if maxBytes > 0 && used+len(ln) > maxBytes && len(out) > 0 {
+			res.NextLineOffset = idx
+			res.EOF = false
+			resolved = true
+			return false
+		}
+		out = append(out, ln)
+		used += len(ln) + 1
+		if len(out) >= limit {
+			pendingNext = idx + 1
+			limitReached = true
+		}
+		return true
+	})
 	if err != nil {
 		return "", Result{Op: "read"}, err
 	}
-	n := len(lines)
-	start := lineOffset
-	if start < 0 {
-		start = n + start
+	res.LineCount = count
+	if !resolved {
+		if limitReached {
+			// 收满后扫描到末尾都没有更多行。
+			res.NextLineOffset = pendingNext
+			res.EOF = true
+		} else {
+			res.NextLineOffset = count
+			res.EOF = true
+		}
 	}
+	return strings.Join(out, "\n"), res, nil
+}
+
+// readNegative 负向 offset：先不知道总数，用容量 |offset|+max(limit-1,0) 的行环形缓冲存尾部，
+// 扫完得到总数后解析真实起点，再按与正向完全一致的窗口逻辑输出。O(窗口) 内存。
+func readNegative(src func() io.Reader, opt Options, lineOffset, byteOffset, limit, maxBytes int) (string, Result, error) {
+	extra := limit - 1
+	if extra < 0 {
+		extra = 0
+	}
+	capN := (-lineOffset) + extra
+	if capN < 1 {
+		capN = 1
+	}
+	buf := make([]string, 0, capN)
+	firstIdx := 0 // buf[0] 的全局行号
+	count := 0
+	err := eachCleanLine(src, opt, false, func(_ int, line string) bool {
+		count++
+		buf = append(buf, line)
+		if len(buf) > capN {
+			buf = buf[1:]
+			firstIdx++
+		}
+		return true
+	})
+	if err != nil {
+		return "", Result{Op: "read"}, err
+	}
+	total := count
+	start := total + lineOffset
 	if start < 0 {
 		start = 0
 	}
-	res := Result{Op: "read", LineCount: n}
-	if start >= n {
+	res := Result{Op: "read", LineCount: total}
+	if start >= total {
 		res.EOF = true
-		res.NextLineOffset = n
+		res.NextLineOffset = total
 		return "", res, nil
 	}
-	if cur := lines[start]; maxBytes > 0 && len(cur)-byteOffset > maxBytes {
+	// buf 覆盖 [firstIdx, total-1]，已证 start>=firstIdx。
+	get := func(gidx int) string { return buf[gidx-firstIdx] }
+	if cur := get(start); maxBytes > 0 && len(cur)-byteOffset > maxBytes {
 		seg := cur[byteOffset : byteOffset+maxBytes]
 		res.NextLineOffset = start
 		res.ByteOffset = byteOffset + maxBytes
@@ -152,8 +261,8 @@ func Read(src func() io.Reader, opt Options, lineOffset, byteOffset, limit, maxB
 	var out []string
 	used := byteOffset
 	i := start
-	for ; i < n && len(out) < limit; i++ {
-		ln := lines[i]
+	for ; i < total && len(out) < limit; i++ {
+		ln := get(i)
 		if i == start && byteOffset > 0 {
 			ln = ln[byteOffset:]
 		}
@@ -164,71 +273,129 @@ func Read(src func() io.Reader, opt Options, lineOffset, byteOffset, limit, maxB
 		used += len(ln) + 1
 	}
 	res.NextLineOffset = i
-	res.EOF = i >= n
+	res.EOF = i >= total
 	return strings.Join(out, "\n"), res, nil
 }
 
 // Grep 从 lineOffset 起逐行匹配 pattern，最多 limit 个命中，各带 before/after 上下文行，
 // 相邻/重叠上下文只出现一次。命中行前缀 "> <行号>: "，上下文行前缀 "  <行号>: "。
+//
+// 单遍流式：before 用容量 before 的行环形缓冲提供；after 因是「命中后再来的行」，用 emitUntil
+// 上界在后续迭代里逐条补发；去重由 last（已输出到的最高行号）保证——只输出行号 > last 的行。
 func Grep(src func() io.Reader, opt Options, pattern string, lineOffset, before, after, limit, maxBytes int) (string, Result, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return "", Result{Op: "grep"}, err
 	}
-	lines, err := cleanLines(src, opt, true)
-	if err != nil {
-		return "", Result{Op: "grep"}, err
-	}
-	n := len(lines)
-	res := Result{Op: "grep", LineCount: n}
 	if lineOffset < 0 {
 		lineOffset = 0
 	}
-	emitted := make([]bool, n)
+	if before < 0 {
+		before = 0
+	}
+	res := Result{Op: "grep"}
 	var sb strings.Builder
+	count := 0
 	hits := 0
-	last := lineOffset - 1
-	i := lineOffset
-	for ; i < n; i++ {
-		if !re.MatchString(lines[i]) {
-			continue
+	last := lineOffset - 1      // 已输出到的最高行号
+	emitUntil := lineOffset - 1 // after 上下文的上界（含）；< lineOffset 表示当前无活动窗口
+	curMatch := lineOffset - 1  // 当前正在输出窗口所属的命中行号（决定 maxBytes 截断时的 NextLineOffset）
+	limitReached := false       // 已达 limit 命中数：不再识别新命中，仅补完 after 上下文
+	matchIdxLimit := 0          // 触发 limit 的命中行号
+	sawBeyond := false          // limit 后是否见过 idx>matchIdxLimit 的行（判 EOF）
+	resolved := false
+	type rec struct {
+		idx  int
+		text string
+	}
+	var recent []rec // 最近 before 条行（作 pre-context 源）
+	emit := func(marker string, j int, text string) bool {
+		line := marker + strconv.Itoa(j) + ": " + text + "\n"
+		if maxBytes > 0 && sb.Len()+len(line) > maxBytes && sb.Len() > 0 {
+			res.NextLineOffset = curMatch
+			res.EOF = false
+			resolved = true
+			return false
 		}
-		lo := i - before
-		if lo < 0 {
-			lo = 0
+		sb.WriteString(line)
+		return true
+	}
+	err = eachCleanLine(src, opt, true, func(idx int, text string) bool {
+		count = idx + 1
+		if idx < lineOffset {
+			return true
 		}
-		if lo <= last {
-			lo = last + 1
-		}
-		hi := i + after
-		if hi >= n {
-			hi = n - 1
-		}
-		for j := lo; j <= hi; j++ {
-			if emitted[j] {
-				continue
+		if limitReached {
+			if idx > matchIdxLimit {
+				sawBeyond = true
 			}
-			marker := "  "
-			if j == i {
-				marker = "> "
+			if idx <= emitUntil && idx > last {
+				if !emit("  ", idx, text) {
+					return false
+				}
+				last = idx
+				return true
 			}
-			line := marker + strconv.Itoa(j) + ": " + lines[j] + "\n"
-			if maxBytes > 0 && sb.Len()+len(line) > maxBytes && sb.Len() > 0 {
-				res.NextLineOffset = i
-				res.EOF = false
-				return strings.TrimRight(sb.String(), "\n"), res, nil
-			}
-			sb.WriteString(line)
-			emitted[j] = true
+			// 越过 after 窗口：收尾。
+			res.EOF = !sawBeyond
+			resolved = true
+			return false
 		}
-		last = hi
-		hits++
-		if limit > 0 && hits >= limit {
-			i++
-			break
+		// 先补发上一命中的 after 上下文（本行落在窗口内且未输出过）。
+		if idx <= emitUntil && idx > last {
+			if !emit("  ", idx, text) {
+				return false
+			}
+			last = idx
+		}
+		if re.MatchString(text) {
+			curMatch = idx
+			lo := idx - before
+			if lo < 0 {
+				lo = 0
+			}
+			if lo <= last {
+				lo = last + 1
+			}
+			base := idx - len(recent) // recent 覆盖 [base, idx-1]
+			for j := lo; j <= idx-1; j++ {
+				if !emit("  ", j, recent[j-base].text) {
+					return false
+				}
+				last = j
+			}
+			if idx > last { // 命中行未被作为上下文输出过时才以 "> " 输出
+				if !emit("> ", idx, text) {
+					return false
+				}
+				last = idx
+			}
+			emitUntil = idx + after
+			hits++
+			if limit > 0 && hits >= limit {
+				res.NextLineOffset = idx + 1
+				matchIdxLimit = idx
+				limitReached = true
+			}
+		}
+		// 当前行入 pre-context 环形缓冲（供后续命中回看）。
+		recent = append(recent, rec{idx, text})
+		if len(recent) > before {
+			recent = recent[len(recent)-before:]
+		}
+		return true
+	})
+	if err != nil {
+		return "", Result{Op: "grep"}, err
+	}
+	if !resolved {
+		if limitReached {
+			res.EOF = !sawBeyond // NextLineOffset 已在命中时设为 matchIdxLimit+1
+		} else {
+			res.NextLineOffset = count
+			res.EOF = true
 		}
 	}
-	res.NextLineOffset = i
-	res.EOF = i >= n
+	res.LineCount = count
 	return strings.TrimRight(sb.String(), "\n"), res, nil
 }

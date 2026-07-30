@@ -2,6 +2,7 @@ package textexplore
 
 import (
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -113,4 +114,45 @@ func TestReadLongLineByteWindow(t *testing.T) {
 
 // TestGrepStillErrorsOnLongLine 本应验证 grep 遇到 >4MiB 单行返回 errLongLine，
 // 但需要分配 4MiB+ 内存，属于易 flaky/大分配用例，这里刻意跳过不实现。
-// stat/read 走 cleanLines(..., false) 容忍超长行；grep 走 cleanLines(..., true) 保留 errLongLine 语义。
+// stat/read 走 eachCleanLine(..., false) 容忍超长行；grep 走 eachCleanLine(..., true) 保留 errLongLine 语义。
+
+// TestReadForwardEarlyStop 校验正向 offset 单遍流式：5000 行只读中段 3 行，能提前停且行号正确。
+func TestReadForwardEarlyStop(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 5000; i++ {
+		b.WriteString("line-")
+		b.WriteString(strconv.Itoa(i))
+		b.WriteByte('\n')
+	}
+	body, res, _ := Read(srcOf(b.String()), Options{}, 4990, 0, 3, 1<<20)
+	if body != "line-4990\nline-4991\nline-4992" {
+		t.Fatalf("body=%q", body)
+	}
+	if res.NextLineOffset != 4993 {
+		t.Fatalf("res=%+v", res)
+	}
+}
+
+// TestGrepAfterContextStreaming 校验 after 上下文流式补发：命中 HIT + 后 2 行 b1,b2，不含 c。
+func TestGrepAfterContextStreaming(t *testing.T) {
+	body, _, err := Grep(srcOf("a\nHIT\nb1\nb2\nc\n"), Options{}, "HIT", 0, 0, 2, 50, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "HIT") || !strings.Contains(body, "b1") || !strings.Contains(body, "b2") || strings.Contains(body, "\nc") {
+		t.Fatalf("body=%q", body)
+	}
+}
+
+// TestObserveReconstructsSentinelThroughRead 校验 LineCleaner 的 observe 路径经 Read 被触达：
+// 哨兵提示符行在 Observe 模式下被还原为 [rc=n] $ cmd，能在读出的正文里看到。
+func TestObserveReconstructsSentinelThroughRead(t *testing.T) {
+	in := "prefix@@PTYSESS@@EXIT=1@@PTYSESS@@> ls -l\nfile\n"
+	body, _, err := Read(srcOf(in), Options{Observe: true}, 0, 0, 10, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "[rc=1] $ ls -l") {
+		t.Fatalf("observe reconstruction missing: body=%q", body)
+	}
+}
