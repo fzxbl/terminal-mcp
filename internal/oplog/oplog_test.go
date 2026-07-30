@@ -146,3 +146,16 @@ func TestRangeReaderFixedEndUnderAppend(t *testing.T) {
 		t.Fatalf("got %q want aaaa", got)
 	}
 }
+
+func TestRangeReaderSingleFDColdAndHot(t *testing.T) {
+	l := openTmp(t, 8) // tiny cache forces cold path
+	l.Append([]byte("0123456789abcdefghij"))
+	r := l.RangeReader(2, 15)
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "23456789abcde" {
+		t.Fatalf("got %q", got)
+	}
+}

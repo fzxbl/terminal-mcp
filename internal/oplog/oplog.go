@@ -163,8 +163,8 @@ func (l *Log) Tail(n int) []byte {
 	return b
 }
 
-// RangeReader 返回固定区间 [from,to) 的流式 reader：分块调用 ReadRange，
-// 不把整段预加载进内存；to 在创建时固定，注册后继续 append 不扩展终点。
+// RangeReader 返回固定区间 [from,to) 的流式 reader：惰性打开一个独立 O_RDONLY fd，
+// 用 ReadAt 顺序读；.raw 为全量真相源，读历史区间无需尾缓存。to 固定，后续 append 不扩展终点。
 func (l *Log) RangeReader(from, to int64) io.Reader {
 	if from < 0 {
 		from = 0
@@ -172,39 +172,50 @@ func (l *Log) RangeReader(from, to int64) io.Reader {
 	if to < from {
 		to = from
 	}
-	return &rangeReader{log: l, cur: from, to: to}
+	l.mu.RLock()
+	var name string
+	if l.f != nil {
+		name = l.f.Name()
+	}
+	l.mu.RUnlock()
+	return &rangeReader{name: name, cur: from, to: to}
 }
 
 type rangeReader struct {
-	log *Log
-	cur int64
-	to  int64
-	buf []byte
+	name string
+	f    *os.File
+	cur  int64
+	to   int64
 }
 
 func (r *rangeReader) Read(p []byte) (int, error) {
-	if len(r.buf) == 0 {
-		if r.cur >= r.to {
+	if r.cur >= r.to {
+		if r.f != nil {
+			_ = r.f.Close()
+			r.f = nil
+		}
+		return 0, io.EOF
+	}
+	if r.f == nil {
+		if r.name == "" {
 			return 0, io.EOF
 		}
-		const chunk = 64 << 10
-		end := r.cur + chunk
-		if end > r.to {
-			end = r.to
-		}
-		b, err := r.log.ReadRange(r.cur, end)
+		f, err := os.Open(r.name)
 		if err != nil {
 			return 0, err
 		}
-		if len(b) == 0 {
-			return 0, io.EOF
-		}
-		r.buf = b
-		r.cur += int64(len(b))
+		r.f = f
 	}
-	n := copy(p, r.buf)
-	r.buf = r.buf[n:]
-	return n, nil
+	want := int64(len(p))
+	if rem := r.to - r.cur; want > rem {
+		want = rem
+	}
+	n, err := r.f.ReadAt(p[:want], r.cur)
+	r.cur += int64(n)
+	if n > 0 && err == io.EOF {
+		err = nil
+	}
+	return n, err
 }
 
 // Close 关闭底层文件。
