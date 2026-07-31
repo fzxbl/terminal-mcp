@@ -65,6 +65,21 @@ func sessionInitScript() string {
 	return s
 }
 
+// promptLineStart 返回缓冲中「最后一个哨兵提示符所在行」的起始绝对偏移。初始化脚本/布哨的回显
+// （哨兵 PS1 赋值、注入的 ulimit、init_commands）都排在该提示符行之前，把 base/delivered 设到这里即可
+// 让这些布哨噪声对模型透明（tail/since_last 都读不到）；同时保留提示符行本身，使随后（模型 Send 或
+// 人工接管）敲入的命令仍与该提示符同处一行，便于 observe 还原成 "[rc=n] $ 命令"。
+// 找不到哨兵时回退到当前末尾（整体隐藏，安全但不保留提示符）。
+func promptLineStart(proc *pty.ProcSession) int64 {
+	tail := proc.Tail(4096)
+	i := strings.LastIndex(tail, interp.SentinelTag)
+	if i < 0 {
+		return proc.Len()
+	}
+	lineStart := strings.LastIndexByte(tail[:i], '\n') + 1 // 无 \n 则为 0（行首即窗口首）
+	return proc.Len() - int64(len(tail)) + int64(lineStart)
+}
+
 // startSession 起子进程并异步跑哨兵 PS1 初始化，就绪后置 ready。
 func startSession(id, host, mode, name string, args []string) (*Session, error) {
 	sess := &Session{ID: id, Host: host, Mode: mode, Status: "loading"}
@@ -93,6 +108,12 @@ func startSession(id, host, mode, name string, args []string) (*Session, error) 
 		deadline := time.Now().Add(to)
 		for time.Now().Before(deadline) {
 			if _, _, _, ok := interp.DetectPromptAtTail(proc.Tail(4096)); ok {
+				// 初始化脚本（哨兵 PS1 + 资源限制 ulimit + init_commands）的回显属布哨噪声，对模型透明：
+				// 把 base/delivered 设到最后一个提示符行首，tail/since_last 都读不到它之前的 ulimit，
+				// 又保留提示符行本身供后续命令关联（与 rearm/sendWithRearm/hard 一致）。
+				b := promptLineStart(proc)
+				sess.setBase(b)
+				sess.setDelivered(b)
 				sess.setStatus("ready", "")
 				return
 			}
@@ -231,8 +252,15 @@ func sendWithRearm(sess *Session, proc *pty.ProcSession, input string, start int
 	state, prompt, code := computeState(sess)
 	k := clean.DeliverBoundary(real, state)
 	out := clean.CleanOutput(real[:k], input)
-	// 布哨噪声一律丢弃：delivered 推进到当前末尾，噪声永不进 since_last。
-	sess.setDelivered(proc.Len())
+	// 布哨噪声（PS1= 回显、重注入的 ulimit、新哨兵）一律不外露：base/delivered 设到最后一个提示符行首，
+	// tail/since_last 都读不到它之前的噪声，又保留新提示符行供后续命令关联。
+	// 仅在确实布上自家哨兵（armed）时才回退到提示符行首；否则（非 bash shell）推到末尾，绝不让游标回退。
+	arm := proc.Len()
+	if armed {
+		arm = promptLineStart(proc)
+	}
+	sess.setDelivered(arm)
+	sess.setBase(arm)
 	if !armed {
 		// 目标非 bash（sh/zsh 等）：一次性降级提示，绝不反复注入 PS1=。
 		note := "[进入非 bash shell，命令边界检测降级；可 terminal_control(rearm) 或退出该 shell]"
@@ -296,8 +324,16 @@ func Read(id string, a ReadArgs) Envelope {
 		return env
 	}
 	// tail（默认）：只取尾部窗口用于判断是否结束，不推进 since_last 游标，可反复调用。
+	// 窗口下界钳在 base（布哨噪声末尾）：绝不回读到初始化脚本 / rearm 噪声之前，
+	// 使注入的 ulimit 等布哨内容对模型透明（与 since_last 一致）。
 	total := proc.Len()
-	full := proc.Tail(config.Get().TailBytes)
+	base := sess.base()
+	tb := int64(config.Get().TailBytes)
+	from := total - tb
+	if from < base {
+		from = base
+	}
+	full := proc.ReadRange(from, total)
 	if state == "running" {
 		full = full[:clean.PendingEscBoundary(full)] // 剪掉窗口末尾被切断的半截转义
 	}
@@ -310,12 +346,12 @@ func Read(id string, a ReadArgs) Envelope {
 	}
 	env := finalize(clean.ObserveOrClean(full, observeTail), 0, 0, state, prompt, code)
 	env.Held = heldNow
-	if total > int64(config.Get().TailBytes) {
+	if visible := total - base; visible > tb {
 		env.Truncated = true
 		// tail 不做 spill：明确告诉调用方，要拿完整输出必须改用 since_last。
 		env.Output += fmt.Sprintf(
 			"\n[tail 仅显示尾部约 %d 字节，前面还有约 %d 字节未展示；要拿完整输出请改用 mode=since_last]",
-			config.Get().TailBytes, total-int64(config.Get().TailBytes))
+			config.Get().TailBytes, visible-tb)
 	}
 	return env
 }
@@ -490,9 +526,15 @@ func Control(id, key string) Envelope {
 		}
 		armStart := proc.Len()
 		proc.Write(sessionInitScript() + "\n")
-		waitForBashSentinelSince(proc, armStart, time.Now().Add(rearmTimeout()))
-		// 把 delivered 推到当前末尾：PS1= 回显 + 新哨兵等布哨噪声不再由 since_last 外露。
-		sess.setDelivered(proc.Len())
+		armed := waitForBashSentinelSince(proc, armStart, time.Now().Add(rearmTimeout()))
+		// 布哨噪声（PS1= 回显、重注入的 ulimit、新哨兵）不外露：armed 时把 base/delivered 设到新提示符行首
+		//（既隐藏噪声又保留提示符供后续命令关联），否则（非 bash）推到末尾，绝不让游标回退。
+		arm := proc.Len()
+		if armed {
+			arm = promptLineStart(proc)
+		}
+		sess.setDelivered(arm)
+		sess.setBase(arm)
 		state, prompt, code := computeState(sess)
 		return finalize("", 0, 0, state, prompt, code)
 	case "hard":
@@ -511,8 +553,18 @@ func Control(id, key string) Envelope {
 			return Envelope{State: "dead", Error: err.Error()}
 		}
 		sess.setProc(p)
-		sess.setDelivered(p.Len())
+		// 先写初始化脚本并等自家哨兵，再设 base/delivered：初始化脚本（哨兵 PS1 + 重注入的 ulimit +
+		// init_commands）回显属布哨噪声，对模型透明。armed 时设到新提示符行首（隐藏噪声又保留提示符），
+		// 否则推到末尾；两者都在当前末尾附近，delivered 不会回退。
+		armStart := p.Len()
 		p.Write(sessionInitScript() + "\n")
+		armed := waitForBashSentinelSince(p, armStart, time.Now().Add(rearmTimeout()))
+		arm := p.Len()
+		if armed {
+			arm = promptLineStart(p)
+		}
+		sess.setBase(arm)
+		sess.setDelivered(arm)
 	default:
 		b, ok := controlKeys[key]
 		if !ok {

@@ -32,6 +32,11 @@ type Session struct {
 
 	deliveredOffset int64 // since_last 交付游标
 
+	// baseOffset：最近一次初始化脚本（哨兵 PS1 + 资源限制 ulimit + init_commands）布哨噪声的末尾偏移。
+	// 该偏移之前的字节属"对模型透明"的布哨噪声（含注入的 ulimit），tail 读窗以它为下界、
+	// 绝不回读到它之前，since_last 的 delivered 也始终 >= 它。会话启动、rearm、hard reset 各注入点更新它。
+	baseOffset int64
+
 	humanHold bool      // 人工接管标志：为真时拦截模型的 send/close/reset
 	holdOwner string    // 当前接管持有者标识（浏览器签名）；空表示无归属（force/测试路径）
 	holdSince time.Time // 接管起始时刻（观测用）
@@ -88,6 +93,16 @@ func (s *Session) delivered() int64 {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	return s.deliveredOffset
+}
+
+// setBase 加 stateMu 写布哨噪声末尾下界（tail 读窗不回读到它之前）。
+func (s *Session) setBase(n int64) { s.stateMu.Lock(); s.baseOffset = n; s.stateMu.Unlock() }
+
+// base 加 stateMu 读布哨噪声末尾下界。
+func (s *Session) base() int64 {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.baseOffset
 }
 
 // setHold 加 stateMu 置/清人工接管标志，置时记录 holdSince。

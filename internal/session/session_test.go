@@ -319,6 +319,44 @@ func TestResourceLimitInjectedAndInheritedUnescapable(t *testing.T) {
 	}
 }
 
+// TestResourceLimitTransparentToModel 校验 resource_limit_cmd 注入的 ulimit 对模型透明：
+// 会话启动后（未发任何命令）用 tail（默认模式）或 since_last 读，都读不到注入的 ulimit 布哨噪声；
+// hard reset 后重注入的 ulimit 同样读不到；且透明不等于失效——限制仍作用于会话。
+// 回归 bug：此前 startSession / hard 未把 base/delivered 推过初始化脚本，模型能在 terminal_output
+// 里直接看到 "ulimit ..." 命令行。
+func TestResourceLimitTransparentToModel(t *testing.T) {
+	config.Load("")
+	config.Get().ResourceLimitCmd = "ulimit -n 137"
+	defer func() { config.Get().ResourceLimitCmd = "" }()
+
+	id := openLocalReady(t)
+	defer Close(id)
+
+	// 1) 启动后立即 tail（默认模式），不得泄露注入的 ulimit。
+	if env := Read(id, ReadArgs{Mode: "tail"}); strings.Contains(env.Output, "ulimit") || strings.Contains(env.Output, "137") {
+		t.Fatalf("tail leaked injected ulimit at open: %q", env.Output)
+	}
+	// 2) 启动后立即 since_last，同样不得泄露。
+	if env := Read(id, ReadArgs{Mode: "since_last"}); strings.Contains(env.Output, "ulimit") || strings.Contains(env.Output, "137") {
+		t.Fatalf("since_last leaked injected ulimit at open: %q", env.Output)
+	}
+	// 3) hard reset 后重注入的 ulimit 对模型仍透明。
+	Control(id, "hard")
+	for i := 0; i < 200; i++ {
+		if Status(id).State == "idle" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if env := Read(id, ReadArgs{Mode: "tail"}); strings.Contains(env.Output, "ulimit") || strings.Contains(env.Output, "137") {
+		t.Fatalf("tail leaked injected ulimit after hard reset: %q", env.Output)
+	}
+	// 4) 透明不等于失效：限制仍作用于会话（模型自己查得到，属其命令输出）。
+	if env := Send(id, "echo h=$(ulimit -Hn)", 5000); !strings.Contains(env.Output, "h=137") {
+		t.Fatalf("resource limit not effective after transparency fix: %q", env.Output)
+	}
+}
+
 // TestReadExploreStatReadGrep 校验：单次输出超过 exec_output_max_bytes 时返回 output_ref，
 // 且用 Explore 的 stat/grep/read 能在该固定区间内探索完整内容。
 func TestReadExploreStatReadGrep(t *testing.T) {
