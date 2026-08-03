@@ -47,7 +47,7 @@ func TestTerminalPageServed(t *testing.T) {
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/debug/terminal/" + id)
+	resp, err := http.Get(srv.URL + "/terminal/" + id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestTerminalPageServed(t *testing.T) {
 func TestTerminalPageUnknownSession404(t *testing.T) {
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/debug/terminal/does-not-exist")
+	resp, err := http.Get(srv.URL + "/terminal/does-not-exist")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestTakeoverEndpointTogglesHold(t *testing.T) {
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/debug/terminal/"+id+"/takeover",
+	resp, err := http.Post(srv.URL+"/terminal/"+id+"/takeover",
 		"application/json", strings.NewReader(`{"on":true}`))
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestTakeoverEndpointTogglesHold(t *testing.T) {
 		t.Fatal("session should be held after takeover on")
 	}
 
-	resp2, err := http.Post(srv.URL+"/debug/terminal/"+id+"/takeover",
+	resp2, err := http.Post(srv.URL+"/terminal/"+id+"/takeover",
 		"application/json", strings.NewReader(`{"on":false}`))
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestTerminalStreamPushesScrollback(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/debug/terminal/"+id+"/stream", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/terminal/"+id+"/stream", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestWSInputWritesToPTYWhenHeld(t *testing.T) {
 
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/debug/terminal/" + id + "/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/terminal/" + id + "/ws"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestWSInputRejectedWhenNotHeld(t *testing.T) {
 	defer session.Close(id)
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/debug/terminal/" + id + "/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/terminal/" + id + "/ws"
 	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err == nil {
 		t.Fatal("dial should fail when session not held")
@@ -188,7 +188,7 @@ func TestTakeoverGETReturnsHeld(t *testing.T) {
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
 	session.Lookup(id).SetHold(true)
-	resp, err := http.Get(srv.URL + "/debug/terminal/" + id + "/takeover")
+	resp, err := http.Get(srv.URL + "/terminal/" + id + "/takeover")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestWSResizeThenInput(t *testing.T) {
 
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/debug/terminal/" + id + "/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/terminal/" + id + "/ws"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +244,7 @@ func TestStreamHistoricalWhenClosed(t *testing.T) {
 	session.Send(id, "echo HISTMARK", 3000)
 	session.Close(id)
 
-	req := httptest.NewRequest(http.MethodGet, "/debug/terminal/"+id+"/stream", nil)
+	req := httptest.NewRequest(http.MethodGet, "/terminal/"+id+"/stream", nil)
 	rr := httptest.NewRecorder()
 	TerminalHandler().ServeHTTP(rr, req)
 	body := rr.Body.String()
@@ -259,7 +259,7 @@ func TestStreamHistoricalWhenClosed(t *testing.T) {
 func TestTakeoverRejectedWhenClosed(t *testing.T) {
 	id, _ := session.OpenLocalForTest()
 	session.Close(id)
-	req := httptest.NewRequest(http.MethodPost, "/debug/terminal/"+id+"/takeover",
+	req := httptest.NewRequest(http.MethodPost, "/terminal/"+id+"/takeover",
 		strings.NewReader(`{"on":true}`))
 	rr := httptest.NewRecorder()
 	TerminalHandler().ServeHTTP(rr, req)
@@ -276,7 +276,7 @@ func TestTakeoverSingleOwnerEnforced(t *testing.T) {
 	defer srv.Close()
 
 	post := func(body string) int {
-		resp, err := http.Post(srv.URL+"/debug/terminal/"+id+"/takeover",
+		resp, err := http.Post(srv.URL+"/terminal/"+id+"/takeover",
 			"application/json", strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
@@ -326,7 +326,7 @@ func TestWSInputRejectedForNonOwner(t *testing.T) {
 	}
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
-	base := "ws" + strings.TrimPrefix(srv.URL, "http") + "/debug/terminal/" + id + "/ws"
+	base := "ws" + strings.TrimPrefix(srv.URL, "http") + "/terminal/" + id + "/ws"
 
 	_, resp, err := websocket.DefaultDialer.Dial(base+"?owner=B", nil)
 	if err == nil {
@@ -350,7 +350,7 @@ func TestTakeoverGETReportsMine(t *testing.T) {
 	srv := httptest.NewServer(TerminalHandler())
 	defer srv.Close()
 	get := func(q string) string {
-		resp, err := http.Get(srv.URL + "/debug/terminal/" + id + "/takeover" + q)
+		resp, err := http.Get(srv.URL + "/terminal/" + id + "/takeover" + q)
 		if err != nil {
 			t.Fatal(err)
 		}

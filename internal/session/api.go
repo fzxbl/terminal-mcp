@@ -36,7 +36,7 @@ func terminalURL(id string) string {
 	if a == "" {
 		return ""
 	}
-	return "http://" + urlHostPort(a) + "/debug/terminal/" + id
+	return "http://" + urlHostPort(a) + "/view/terminal/" + id
 }
 
 // urlHostPort 把 listen_addr 归一为可访问的 host:port：通配 host 换成本机 IP，其余原样返回。

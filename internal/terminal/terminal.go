@@ -25,13 +25,16 @@ const (
 // TerminalHandler 提供只读、可滚动的网页终端，供人（值班/开发）实时观看模型在会话里的操作。
 // 默认只读；点「人工接管」后经 WebSocket 转发按键到 PTY。
 //
-//	GET  /debug/terminal/<id>          -> 内嵌渲染器的 HTML 页面
-//	GET  /debug/terminal/<id>/stream   -> SSE，先推全量 scrollback 再持续推增量
-//	GET  /debug/terminal/<id>/takeover -> 返回当前接管态；POST 置/清接管态
-//	GET  /debug/terminal/<id>/ws       -> WebSocket，接管态下转发按键/resize 到 PTY
+// handler 内部固定按 /terminal/ 前缀解析；若外围需要额外前缀（如 /view），
+// 在挂载时用 http.StripPrefix 把它剥掉，本 handler 无需感知。
+//
+//	GET  /terminal/<id>          -> 内嵌渲染器的 HTML 页面
+//	GET  /terminal/<id>/stream   -> SSE，先推全量 scrollback 再持续推增量
+//	GET  /terminal/<id>/takeover -> 返回当前接管态；POST 置/清接管态
+//	GET  /terminal/<id>/ws       -> WebSocket，接管态下转发按键/resize 到 PTY
 func TerminalHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		rest := strings.TrimPrefix(req.URL.Path, "/debug/terminal/")
+		rest := strings.TrimPrefix(req.URL.Path, "/terminal/")
 		rest = strings.Trim(rest, "/")
 		if rest == "" {
 			http.Error(w, "missing session id", http.StatusBadRequest)

@@ -172,6 +172,9 @@ const terminalPageHTML = `<!DOCTYPE html>
 <script>
 (function(){
   var id = "__SESSION_ID__";
+  // 本页地址即 .../terminal/<id>，子资源（stream/takeover/ws）在其下。
+  // 基于 location.pathname 推导，与挂载前缀（/terminal 或外围加的 /view 等）解耦。
+  var base = location.pathname.replace(/\/+$/, "");
   var term = new Terminal({
     cursorBlink: true, convertEol: false, scrollback: 5000, lineHeight: 1.2, letterSpacing: 0,
     fontFamily: '"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace', fontSize: 14
@@ -363,7 +366,7 @@ const terminalPageHTML = `<!DOCTYPE html>
     applyFont(savedFont); applyFontSize(savedSize);
   }
   function setTakeover(on){
-    fetch("/debug/terminal/"+encodeURIComponent(id)+"/takeover",
+    fetch(base+"/takeover",
       {method:"POST", headers:{"Content-Type":"application/json"},
        body:JSON.stringify({on:on, owner:owner, cols:term.cols, rows:term.rows})})
      .then(function(r){ return r.json(); })
@@ -395,7 +398,7 @@ const terminalPageHTML = `<!DOCTYPE html>
   function openWS(){
     if(ws) return;
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(proto+"//"+location.host+"/debug/terminal/"+encodeURIComponent(id)+"/ws?owner="+encodeURIComponent(owner));
+    ws = new WebSocket(proto+"//"+location.host+base+"/ws?owner="+encodeURIComponent(owner));
     ws.onopen = function(){ sendResize(); };
     ws.onclose = function(){ ws = null; };
   }
@@ -409,7 +412,7 @@ const terminalPageHTML = `<!DOCTYPE html>
   // 接管是服务端会话级状态，非本窗口私有：加载时同步一次，并轮询保持三态 UI 与他人接管态实时一致。
   function syncTakeover(){
     if(finished) return;
-    fetch("/debug/terminal/"+encodeURIComponent(id)+"/takeover?owner="+encodeURIComponent(owner))
+    fetch(base+"/takeover?owner="+encodeURIComponent(owner))
      .then(function(r){ return r.json(); })
      .then(function(j){ if(!finished) applyState(!!j.held, !!j.mine); })
      .catch(function(){});
@@ -418,7 +421,7 @@ const terminalPageHTML = `<!DOCTYPE html>
   setInterval(syncTakeover, 2500);
 
   // ---- 输出：SSE 原始字节直接喂给 xterm ----
-  var es = new EventSource("/debug/terminal/" + encodeURIComponent(id) + "/stream");
+  var es = new EventSource(base + "/stream");
   es.addEventListener("data", function(e){ term.write(b64ToBytes(e.data)); });
   es.addEventListener("state", function(e){ setState(e.data); });
   es.onerror = function(){ if(!finished) setState("reconnecting"); };

@@ -24,12 +24,12 @@ go get github.com/fzxbl/terminal-mcp
 | --- | --- |
 | `Init(configPath string)` | Load config (`""` = defaults) and initialize the session pool. Call once at startup, before anything else. |
 | `RegisterTools(server *mcp.Server, auditWriter io.Writer)` | Register all `terminal_*` tools onto your official-SDK server. `auditWriter` may be `nil` (no audit; e.g. when the host already logs tool calls). |
-| `TerminalHandler() http.Handler` | The web terminal (human-takeover) HTTP handler. Mount it under `/debug/terminal/` in your router. `RegisterTools` does NOT include it. |
+| `TerminalHandler() http.Handler` | The web terminal (human-takeover) HTTP handler. It parses paths under `/terminal/`; mount it at `/terminal/` or under any prefix via `http.StripPrefix`. `RegisterTools` does NOT include it. |
 | `SetAdvertiseAddr(hostPort string)` | Override the `host:port` used to build `terminal_url`. Needed when the host process owns the socket and its address differs from this module's `listen_addr`. Empty resets to the default. Concurrency-safe. |
 | `SetToolDescriptions(over map[string]string)` | Override the model-facing tool descriptions by tool name (keys like `terminal_open`). Call before `RegisterTools`/`NewHTTPHandler`. Empty-string entries are ignored; `nil` clears. Precedence: programmatic > config `tool_descriptions` > built-in default. Concurrency-safe. |
 | `StartIdleGC(ctx context.Context)` | Start the idle-session GC + transcript-sweep goroutine. Cancel `ctx` to stop and reclaim all sessions. |
 | `Shutdown()` | Close all sessions and reclaim child process groups (idempotent). |
-| `NewHTTPHandler(auditWriter io.Writer) http.Handler` | All-in-one handler that mounts BOTH `/mcp` and `/debug/terminal/`. Use it only if you want terminal-mcp to own its own `/mcp` (not the shared-server case). |
+| `NewHTTPHandler(auditWriter io.Writer) http.Handler` | All-in-one handler that mounts BOTH `/mcp` and `/view/terminal/`. Use it only if you want terminal-mcp to own its own `/mcp` (not the shared-server case). |
 
 ## Pattern A — share one `/mcp` with your own tools (recommended)
 
@@ -68,11 +68,11 @@ func main() {
     // ... register your own tools onto `server` here ...
     mcpserver.RegisterTools(server, nil) // terminal_* tools
 
-    // 5) Routing: /mcp -> your server; /debug/terminal/ -> web terminal (human takeover)
+    // 5) Routing: /mcp -> your server; /view/terminal/ -> web terminal (human takeover)
     mux := http.NewServeMux()
     mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
         func(*http.Request) *mcp.Server { return server }, nil))
-    mux.Handle("/debug/terminal/", mcpserver.TerminalHandler())
+    mux.Handle("/view/terminal/", http.StripPrefix("/view", mcpserver.TerminalHandler()))
     log.Fatal(http.ListenAndServe(":8080", mux))
 }
 ```
@@ -84,7 +84,7 @@ If terminal-mcp can own its own `/mcp`:
 ```go
 mcpserver.Init("config.toml")
 mcpserver.StartIdleGC(context.Background())
-h := mcpserver.NewHTTPHandler(nil) // mounts /mcp and /debug/terminal/
+h := mcpserver.NewHTTPHandler(nil) // mounts /mcp and /view/terminal/
 log.Fatal(http.ListenAndServe(":8900", h))
 ```
 
@@ -93,10 +93,12 @@ log.Fatal(http.ListenAndServe(":8900", h))
 - **`/mcp`** — you choose. `RegisterTools` only registers tools onto the
   `*mcp.Server`; it has nothing to do with the HTTP path. Mount your server's
   streamable handler at any path.
-- **`/debug/terminal/`** — **fixed prefix, must be mounted exactly there.**
-  `TerminalHandler` parses the request path by this prefix, and both `terminal_url`
-  and the web frontend's SSE / WebSocket / takeover calls use absolute
-  `/debug/terminal/...` paths. Changing the prefix breaks the links (404).
+- **web terminal** — the handler parses request paths under `/terminal/`. Mount it
+  at `/terminal/`, or under any prefix by stripping the prefix first, e.g.
+  `http.StripPrefix("/view", TerminalHandler())` at `/view/terminal/`. The web
+  frontend derives its SSE / WebSocket / takeover URLs from the page location
+  (relative), so any mount prefix works without code changes. Keep `terminal_url`
+  (built by `SetAdvertiseAddr` + the mount path) consistent with where you mount.
 - **host:port** — set via `SetAdvertiseAddr` (used to build `terminal_url`); it does
   **not** affect the path prefix.
 

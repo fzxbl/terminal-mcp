@@ -49,7 +49,7 @@ go install github.com/fzxbl/terminal-mcp/cmd/terminal-mcp@latest
 terminal-mcp --listen 127.0.0.1:8900
 ```
 
-MCP 端点在 `/mcp`；某会话的网页终端在 `/debug/terminal/<session_id>`。
+MCP 端点在 `/mcp`；某会话的网页终端在 `/view/terminal/<session_id>`。
 
 ## 在 AI 编码工具里使用
 
@@ -125,10 +125,10 @@ mcpserver.SetToolDescriptions(map[string]string{ // 可选：按自家话术改�
 mcpserver.StartIdleGC(ctx)
 
 mcpserver.RegisterTools(server, auditWriter)          // terminal_* 工具
-mux.Handle("/debug/terminal/", mcpserver.TerminalHandler()) // 网页终端（人工接管）
+mux.Handle("/view/terminal/", http.StripPrefix("/view", mcpserver.TerminalHandler())) // 网页终端（人工接管）
 ```
 
-`/mcp` 路径由你决定；网页终端前缀 `/debug/terminal/` 固定。工具描述也可用配置文件 `[tool_descriptions]` 覆盖（优先级：`SetToolDescriptions` > 配置文件 > 内置默认）。完整公开 API、共用 `/mcp` 的接入范式、路径约定、鉴权注意事项与配置说明见 **[docs/EMBEDDING.zh-CN.md](docs/EMBEDDING.zh-CN.md)**。
+`/mcp` 路径由你决定；网页终端 handler 按 `/terminal/` 前缀解析，可挂在 `/terminal/`，也可用 `http.StripPrefix` 挂在任意前缀下（如 `/view/terminal/`）——前端从页面地址推导 SSE / WebSocket / 接管的相对 URL，任意挂载点都可用。工具描述也可用配置文件 `[tool_descriptions]` 覆盖（优先级：`SetToolDescriptions` > 配置文件 > 内置默认）。完整公开 API、共用 `/mcp` 的接入范式、路径约定、鉴权注意事项与配置说明见 **[docs/EMBEDDING.zh-CN.md](docs/EMBEDDING.zh-CN.md)**。
 
 ## 分布式部署与横向扩展
 

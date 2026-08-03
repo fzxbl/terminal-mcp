@@ -49,7 +49,7 @@ go install github.com/fzxbl/terminal-mcp/cmd/terminal-mcp@latest
 terminal-mcp --listen 127.0.0.1:8900
 ```
 
-The MCP endpoint is at `/mcp`; a session's web terminal is at `/debug/terminal/<session_id>`.
+The MCP endpoint is at `/mcp`; a session's web terminal is at `/view/terminal/<session_id>`.
 
 ## Use it from your AI coding tool
 
@@ -125,10 +125,10 @@ mcpserver.SetToolDescriptions(map[string]string{ // optional: reword tool descri
 mcpserver.StartIdleGC(ctx)
 
 mcpserver.RegisterTools(server, auditWriter)          // terminal_* tools
-mux.Handle("/debug/terminal/", mcpserver.TerminalHandler()) // web terminal (human takeover)
+mux.Handle("/view/terminal/", http.StripPrefix("/view", mcpserver.TerminalHandler())) // web terminal (human takeover)
 ```
 
-`/mcp` path is yours to choose; the web terminal prefix `/debug/terminal/` is fixed. Tool descriptions can also be overridden via the `[tool_descriptions]` config table (precedence: `SetToolDescriptions` > config > built-in default). See **[docs/EMBEDDING.md](docs/EMBEDDING.md)** for the full public API reference, the shared-`/mcp` integration pattern, path conventions, authorization notes, and the config reference.
+`/mcp` path is yours to choose; the web terminal handler parses paths under `/terminal/` and can be mounted under any prefix by stripping it first (e.g. `/view/terminal/` via `http.StripPrefix("/view", ...)`) — the frontend derives its SSE/WebSocket/takeover URLs from the page location, so any mount works. Tool descriptions can also be overridden via the `[tool_descriptions]` config table (precedence: `SetToolDescriptions` > config > built-in default). See **[docs/EMBEDDING.md](docs/EMBEDDING.md)** for the full public API reference, the shared-`/mcp` integration pattern, path conventions, authorization notes, and the config reference.
 
 ## Distributed deployment & horizontal scaling
 

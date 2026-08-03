@@ -41,7 +41,7 @@ func RegisterTools(server *mcp.Server, auditWriter io.Writer) {
 }
 
 // NewHTTPHandler returns an http.Handler that serves the MCP Streamable HTTP
-// endpoint at /mcp and the web terminal UI at /debug/terminal/. Mount it in
+// endpoint at /mcp and the web terminal UI at /view/terminal/. Mount it in
 // your own server or use standalone. Call Init first.
 //
 // auditWriter receives JSON audit log entries (nil = discard).
@@ -49,7 +49,8 @@ func NewHTTPHandler(auditWriter io.Writer) http.Handler {
 	a := audit.New(discardIfNil(auditWriter))
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", sessionRoutingMiddleware(newMCPStreamableHandler(a)))
-	mux.Handle("/debug/terminal/", terminal.TerminalHandler())
+	// 外围加 /view 前缀：StripPrefix 剥掉后交给按 /terminal/ 解析的 handler。
+	mux.Handle("/view/terminal/", http.StripPrefix("/view", terminal.TerminalHandler()))
 	return mux
 }
 
@@ -73,10 +74,11 @@ func discardIfNil(w io.Writer) io.Writer {
 }
 
 // TerminalHandler returns just the web terminal (human-takeover) HTTP handler,
-// which serves GET/POST/WebSocket under /debug/terminal/. Use it when you embed
+// which serves GET/POST/WebSocket under /terminal/. Use it when you embed
 // the tools via RegisterTools onto your own MCP server (which does NOT include
-// the web UI) and want to mount the terminal UI under /debug/terminal/ in your
-// own router. Call Init first.
+// the web UI) and want to mount the terminal UI in your own router. Mount it at
+// /terminal/, or under any prefix by stripping it first, e.g.
+// http.StripPrefix("/view", TerminalHandler()) at /view/terminal/. Call Init first.
 func TerminalHandler() http.Handler { return terminal.TerminalHandler() }
 
 // SetAdvertiseAddr overrides the host:port used to build the terminal_url returned

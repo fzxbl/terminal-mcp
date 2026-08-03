@@ -23,12 +23,12 @@ go get github.com/fzxbl/terminal-mcp
 | --- | --- |
 | `Init(configPath string)` | 加载配置（`""` 用默认值）并初始化会话池。启动时最先调用一次。 |
 | `RegisterTools(server *mcp.Server, auditWriter io.Writer)` | 把全部 `terminal_*` 工具注册到你的官方 SDK server。`auditWriter` 可传 `nil`（不记审计，例如宿主已记录工具调用）。 |
-| `TerminalHandler() http.Handler` | 网页终端（人工接管）HTTP 处理器。挂到你路由里的 `/debug/terminal/`。`RegisterTools` **不含**它。 |
+| `TerminalHandler() http.Handler` | 网页终端（人工接管）HTTP 处理器。按 `/terminal/` 前缀解析请求，可挂在 `/terminal/` 或用 `http.StripPrefix` 挂在任意前缀下。`RegisterTools` **不含**它。 |
 | `SetAdvertiseAddr(hostPort string)` | 覆盖拼 `terminal_url` 用的 `host:port`。当 socket 由宿主进程持有、其地址与本模块 `listen_addr` 不同时需要。传空恢复默认。并发安全。 |
 | `SetToolDescriptions(over map[string]string)` | 按工具名覆盖对外暴露给模型的工具描述（key 如 `terminal_open`）。在 `RegisterTools`/`NewHTTPHandler` 之前调用。空串条目忽略，传 `nil` 清空。优先级：编程覆盖 > 配置文件 `tool_descriptions` > 内置默认。并发安全。 |
 | `StartIdleGC(ctx context.Context)` | 启动空闲会话 GC + transcript 清理协程。取消 `ctx` 即停止并回收所有会话。 |
 | `Shutdown()` | 关闭所有会话、回收子进程组（幂等）。 |
-| `NewHTTPHandler(auditWriter io.Writer) http.Handler` | 一体化 handler，同时挂 `/mcp` 和 `/debug/terminal/`。仅当你要让 terminal-mcp 独占自己的 `/mcp`（非共用 server 场景）时用。 |
+| `NewHTTPHandler(auditWriter io.Writer) http.Handler` | 一体化 handler，同时挂 `/mcp` 和 `/view/terminal/`。仅当你要让 terminal-mcp 独占自己的 `/mcp`（非共用 server 场景）时用。 |
 
 ## 模式 A —— 与你自己的工具共用一个 `/mcp`（推荐）
 
@@ -65,11 +65,11 @@ func main() {
     // ... 在这里注册你自己的工具到 server ...
     mcpserver.RegisterTools(server, nil) // terminal_* 工具
 
-    // 5) 路由：/mcp -> 你的 server；/debug/terminal/ -> 网页终端（人工接管）
+    // 5) 路由：/mcp -> 你的 server；/view/terminal/ -> 网页终端（人工接管）
     mux := http.NewServeMux()
     mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
         func(*http.Request) *mcp.Server { return server }, nil))
-    mux.Handle("/debug/terminal/", mcpserver.TerminalHandler())
+    mux.Handle("/view/terminal/", http.StripPrefix("/view", mcpserver.TerminalHandler()))
     log.Fatal(http.ListenAndServe(":8080", mux))
 }
 ```
@@ -81,7 +81,7 @@ func main() {
 ```go
 mcpserver.Init("config.toml")
 mcpserver.StartIdleGC(context.Background())
-h := mcpserver.NewHTTPHandler(nil) // 同时挂 /mcp 和 /debug/terminal/
+h := mcpserver.NewHTTPHandler(nil) // 同时挂 /mcp 和 /view/terminal/
 log.Fatal(http.ListenAndServe(":8900", h))
 ```
 
@@ -89,9 +89,11 @@ log.Fatal(http.ListenAndServe(":8900", h))
 
 - **`/mcp`** —— 你决定。`RegisterTools` 只把工具注册到 `*mcp.Server`，与 HTTP 路径无关，
   你可以把 server 的 streamable handler 挂到任意路径。
-- **`/debug/terminal/`** —— **前缀写死，必须原样挂在这里**。`TerminalHandler` 按此前缀
-  解析请求，`terminal_url` 与网页前端的 SSE / WebSocket / 接管请求也都用绝对路径
-  `/debug/terminal/...`。换前缀会导致链接 404。
+- **网页终端** —— handler 按 `/terminal/` 前缀解析请求。可挂在 `/terminal/`，也可用
+  `http.StripPrefix` 先剥掉外层前缀后挂在任意路径（如 `http.StripPrefix("/view", ...)`
+  挂在 `/view/terminal/`）。网页前端从页面地址推导 SSE / WebSocket / 接管的相对 URL，
+  任意挂载前缀都可用，无需改代码。注意让 `terminal_url`（由 `SetAdvertiseAddr` + 挂载路径拼成）
+  与实际挂载点一致。
 - **host:port** —— 用 `SetAdvertiseAddr` 指定（拼 `terminal_url` 用），**不影响路径前缀**。
 
 ## 鉴权（重要）
