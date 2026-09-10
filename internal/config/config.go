@@ -69,7 +69,7 @@ type Config struct {
 	// hard reset 时都会重新注入，因此：
 	//   - 启动时即作用于会话根 shell，被其所有子进程继承（ulimit 无 -S/-H 时同时设软硬限，硬限一经设定
 	//     非特权进程无法再调高，故本地子 shell / 普通命令即便再 `ulimit` 也无法逃逸出该上限）；
-	//   - 切进 ssh 远端 / su / docker exec / matrix_jail 等新 shell（见 shell_switch_commands）后由 rearm
+	//   - 切进 ssh 远端 / su / docker exec / chroot 等新 shell（见 shell_switch_commands）后由 rearm
 	//     在新上下文里重新注入，把限制带进跨机/跨容器/跨用户的新 shell。
 	// 边界（诚实告知）：ulimit 无法约束「提权到 root 后主动调高自身硬限」，也无法约束「由守护进程另起、
 	// 不继承本会话的进程树」（如 docker run 经 dockerd 拉起的容器）。要对本机进程树做与权限无关的强约束，

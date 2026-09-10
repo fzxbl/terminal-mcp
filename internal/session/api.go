@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/fzxbl/terminal-mcp/internal/config"
@@ -13,30 +14,64 @@ import (
 // 不直接触碰 Session 的非导出字段、theStore 或 dispatch 等内部符号。
 // Send/Read/Control/Status/Close/Envelope/BuildStartArgs 已在 session.go 中导出，直接复用。
 
-// advertiseAddr 覆盖 terminal_url 的 host:port（嵌入宿主时用）；未设置则回退 listen_addr。
-var advertiseAddr atomic.Value // string
+// publicBase 是 terminal_url 的对外入口（scheme://host[:port]，不含挂载前缀）；
+// 空则回退 listen_addr 推导。挂载前缀单独存在 pathPrefix 里，由 MountWebTerminal 给出。
+var publicBase atomic.Value // string
 
-// SetAdvertiseAddr 覆盖 terminal_url 使用的 host:port。把本模块嵌入到别的 HTTP 服务里、
-// 由宿主进程持有监听 socket（其地址/端口与本模块 listen_addr 不一致）时，用它指向宿主的
-// 实际对外地址，terminal_url 才点得开。传空串恢复用 listen_addr 的默认行为。并发安全。
-func SetAdvertiseAddr(hostPort string) {
-	advertiseAddr.Store(hostPort)
-	if currentNodeToken() == "" {
-		SetNodeToken(hostPort)
-	}
+// pathPrefix 是宿主把网页终端挂在哪个前缀之下（如 "/mcp"）；空表示挂在根上。
+var pathPrefix atomic.Value // string
+
+// SetPublicBaseURL 设置 terminal_url 的对外入口，形如 "https://mcp.example.com" 或
+// "http://10.1.2.3:8080"：**它是给人点的入口**，可以是域名/VIP/负载均衡地址，不必是本节点
+// 直连地址——网页终端的属主信息在路径里（…/terminal/<session_id>），落到任意节点都会被
+// mcpserver.WithTerminalRouting 反代到属主节点。
+//
+// **不要在这里拼挂载前缀**：前缀由 MountWebTerminal 一次给出（宿主也只在那里说一次挂在哪），
+// 两处都写会拼出双份前缀。base 末尾的 "/" 会被去掉；没写 scheme 时按 http:// 补全。
+// 传空串恢复「按 listen_addr 推导」的单机默认行为。并发安全。
+//
+// 与 SetSelfAddr 正交：那个是**节点间拨号用的直连 host:port**（编码进 session_id），
+// 只走内网、不进任何对外文本；本函数只影响交给人的链接。两者互不写对方，调用顺序无关。
+func SetPublicBaseURL(base string) {
+	publicBase.Store(normalizeBaseURL(base))
 }
 
-// terminalURL 拼只读终端页地址（TerminalHandler 提供该页面）。优先用 SetAdvertiseAddr 设定的
-// host:port；否则回退 listen_addr。host 为通配（0.0.0.0/::/空）时用本机实际 IP 替换，保证可点。
-func terminalURL(id string) string {
-	a, _ := advertiseAddr.Load().(string)
-	if a == "" {
-		a = config.Get().ListenAddr
-	}
-	if a == "" {
+// SetPathPrefix 记下宿主把网页终端挂在哪个前缀之下，供 terminal_url 与跨节点转发推导实际
+// 路径。唯一来源是 mcpserver.MountWebTerminal（挂载与声明同一次完成，不会两处写歪）。
+func SetPathPrefix(prefix string) { pathPrefix.Store(prefix) }
+
+// PathPrefix 返回宿主给的挂载前缀；未挂载时为空串。
+func PathPrefix() string {
+	p, _ := pathPrefix.Load().(string)
+	return p
+}
+
+// normalizeBaseURL 归一化对外基础地址：去掉末尾斜杠、补全 scheme。空串原样返回。
+func normalizeBaseURL(base string) string {
+	base = strings.TrimRight(base, "/")
+	if base == "" {
 		return ""
 	}
-	return "http://" + urlHostPort(a) + "/view/terminal/" + id
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
+	return base
+}
+
+// terminalURL 拼只读终端页地址（TerminalHandler 提供该页面）：对外入口 + 宿主挂载前缀 +
+// 本模块内部的 /view/terminal/ + id。入口优先取 SetPublicBaseURL，否则回退 listen_addr
+// （host 为通配 0.0.0.0/:: 时换成本机实际 IP，保证可点）。
+func terminalURL(id string) string {
+	base, _ := publicBase.Load().(string)
+	if base == "" {
+		if addr := config.Get().ListenAddr; addr != "" {
+			base = "http://" + urlHostPort(addr)
+		}
+	}
+	if base == "" {
+		return ""
+	}
+	return base + PathPrefix() + "/view/terminal/" + id
 }
 
 // urlHostPort 把 listen_addr 归一为可访问的 host:port：通配 host 换成本机 IP，其余原样返回。
@@ -57,7 +92,7 @@ func urlHostPort(listenAddr string) string {
 // ReachableHostPort 由监听地址推导出"兄弟节点可直连的本机地址"，供分布式部署自动确定属主节点 token，
 // 免去每实例配不同地址：把 listen_addr 里的通配 host（空/0.0.0.0/::）替换为进程自动探测到的本机 IP，
 // 其余（如显式 IP 或 127.0.0.1）原样返回。这样所有实例可共用同一份 `listen_addr = "0.0.0.0:<port>"` 配置，
-// 每个进程各自解析出自己的可达地址。跨 NAT/需对外映射地址时，仍可用 SetAdvertiseAddr 显式覆盖。
+// 每个进程各自解析出自己的可达地址。跨 NAT/需对外映射地址时，仍可用 SetSelfAddr 显式覆盖。
 func ReachableHostPort(listenAddr string) string { return urlHostPort(listenAddr) }
 
 // localIP 纯本地探测本机首选 IPv4：枚举已启用、非回环网卡的地址，取第一个全局单播 IPv4。

@@ -10,15 +10,15 @@ import (
 func TestMatchesShellSwitch(t *testing.T) {
 	config.Load("")
 	orig := config.Get().ShellSwitchCommands
-	// 临时把 matrix_jail 加进注册表，验证可追加的自定义项；结束后还原。
-	config.Get().ShellSwitchCommands = append([]string{"matrix_jail"}, orig...)
+	// 临时把 sandbox_enter 加进注册表，验证可追加的自定义项；结束后还原。
+	config.Get().ShellSwitchCommands = append([]string{"sandbox_enter"}, orig...)
 	defer func() { config.Get().ShellSwitchCommands = orig }()
 
 	cases := []struct {
 		in   string
 		want bool
 	}{
-		{"matrix_jail x", true},
+		{"sandbox_enter x", true},
 		{"ssh host", true},
 		{"cd /tmp && ssh h", true},
 		{"grep ssh f", false},

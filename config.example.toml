@@ -18,7 +18,7 @@ transcript_retention_days = 7
 audit_log = ""
 
 # shell 切换命令注册表：命中这些命令且命令跑完后哨兵丢失时，自动重新布哨（re-arm）恢复命令边界检测。
-# 明文、可追加（如需加 matrix_jail 等自定义进容器命令，把它加到列表里）。留空则用下列默认值。
+# 明文、可追加（如需加自定义的进容器/切 shell 命令，把它加到列表里）。留空则用下列默认值。
 shell_switch_commands = ["ssh", "su", "sudo -i", "sudo su", "docker exec", "kubectl exec", "nsenter", "chroot"]
 # 是否自动布哨，默认 true；置 false 完全关闭自动布哨，仅保留手动 terminal_control(key="rearm")。
 auto_rearm = true
@@ -35,7 +35,7 @@ disable_local_mode = false
 # 随哨兵写在初始化脚本最前面，并在每次切进新一层 shell 的重新布哨（rearm）与 hard reset 时重新注入，因此：
 #   - 启动即作用于会话根 shell，被其所有子进程继承；ulimit 不带 -S/-H 时同时设软硬限，硬限一经设定非特权
 #     进程无法再调高，本地子 shell / 普通命令再怎么 ulimit 也无法逃逸出该上限；
-#   - 切进 ssh 远端 / su / docker exec / matrix_jail 等新 shell 后由 rearm 在新上下文重新注入。
+#   - 切进 ssh 远端 / su / docker exec / chroot 等新 shell 后由 rearm 在新上下文重新注入。
 # 边界：ulimit 无法约束「提权 root 后调高自身硬限」，也无法约束「守护进程另起、不继承本会话的进程树」；
 # 要对本机进程树做与权限无关的强约束请改用 cgroup v2。多条限制用 ; 连接。
 # resource_limit_cmd = "ulimit -v 4194304; ulimit -t 600; ulimit -u 4096"
@@ -65,7 +65,8 @@ disable_local_mode = false
 # terminal_list 会向这些节点 fan-out 聚合会话（反向代理路由不需要此项——属主地址已编码在 session_id 内）。
 # 单机部署留空即可。分布式下所有节点可共用同一份配置：把 listen_addr 设为 "0.0.0.0:<port>"，
 # 进程会自动探测本机可达 IP 作为属主地址（无需每实例配不同地址）；跨 NAT/需对外映射时用嵌入接口
-# SetAdvertiseAddr 覆盖。peers 也可用 SetPeerProvider 动态发现，从而完全免配置。
+# SetSelfAddr 覆盖。给人点的 terminal_url 用 SetPublicBaseURL 单独指定（可填域名/VIP，与属主
+# 地址无关）。peers 也可用 SetPeerProvider 动态发现，从而完全免配置。
 # peers = ["10.0.0.2:8900", "10.0.0.3:8900"]
 
 # 客户端身份签名：决定「如何判定同一个客户端」，用于 terminal_list 归属隔离与会话越权保护。

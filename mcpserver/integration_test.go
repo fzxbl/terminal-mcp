@@ -15,7 +15,7 @@ import (
 // 应通过已接入的路由中间件反代到 A，并带上防环转发头。
 func TestTwoNodeReverseProxyThroughHandler(t *testing.T) {
 	Init("")
-	defer session.SetNodeToken("")
+	defer session.SetSelfAddr("")
 
 	// 假节点 A：仅用于接住被反代过来的请求。
 	var aHit atomic.Bool
@@ -31,8 +31,8 @@ func TestTwoNodeReverseProxyThroughHandler(t *testing.T) {
 	aHost := strings.TrimPrefix(nodeA.URL, "http://")
 
 	// 节点 B：真实 handler，本机 token = bHost。必须在构建 handler 前设置好本机 token。
-	session.SetNodeToken("10.255.255.255:1") // 一个绝不等于 aHost 的本机 token
-	setPeers([]string{aHost})                // 把 A 加入白名单，允许被反代（SSRF 防护要求）
+	session.SetSelfAddr("10.255.255.255:1") // 一个绝不等于 aHost 的本机 token
+	setPeers([]string{aHost})               // 把 A 加入白名单，允许被反代（SSRF 防护要求）
 	defer setPeers(nil)
 	nodeB := httptest.NewServer(NewHTTPHandler(nil))
 	defer nodeB.Close()

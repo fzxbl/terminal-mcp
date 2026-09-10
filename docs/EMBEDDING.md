@@ -25,7 +25,10 @@ go get github.com/fzxbl/terminal-mcp
 | `Init(configPath string)` | Load config (`""` = defaults) and initialize the session pool. Call once at startup, before anything else. |
 | `RegisterTools(server *mcp.Server, auditWriter io.Writer)` | Register all `terminal_*` tools onto your official-SDK server. `auditWriter` may be `nil` (no audit; e.g. when the host already logs tool calls). |
 | `TerminalHandler() http.Handler` | The web terminal (human-takeover) HTTP handler. It parses paths under `/terminal/`; mount it at `/terminal/` or under any prefix via `http.StripPrefix`. `RegisterTools` does NOT include it. |
-| `SetAdvertiseAddr(hostPort string)` | Override the `host:port` used to build `terminal_url`. Needed when the host process owns the socket and its address differs from this module's `listen_addr`. Empty resets to the default. Concurrency-safe. |
+| `SetPublicBaseURL(base string)` | Set the outward entry used to build `terminal_url`, e.g. `https://mcp.example.com/mcp`. **A domain or VIP is fine**: the web terminal carries its owner in the path, so any node receiving the request reverse-proxies it to the owner via `WithTerminalRouting`. A trailing `/` is trimmed; a missing scheme defaults to `http://`. Empty restores the `listen_addr`-based default. Concurrency-safe. |
+| `SetSelfAddr(hostPort string)` | Set this node's **directly dialable** `host:port`. It is encoded into `session_id` and used only for node-to-node forwarding — never in outward text. Defaults to a value derived from `listen_addr` (a wildcard host resolves to the machine IP). Orthogonal to `SetPublicBaseURL`; call order is irrelevant. |
+| `WithSessionRouting(next http.Handler) http.Handler` | Wrap the **MCP handler**: when the `session_id` in a `tools/call` belongs to another node, the whole request is proxied there. |
+| `WithTerminalRouting(next http.Handler) http.Handler` | Wrap the **web terminal handler**: the owner is in the path (`…/terminal/<session_id>`), and a non-local owner is proxied. Must wrap **outside** `http.StripPrefix` (forwarding preserves the original path). Without it, in a multi-node deployment (N-1)/N of clicks show "session not found". |
 | `SetToolDescriptions(over map[string]string)` | Override the model-facing tool descriptions by tool name (keys like `terminal_open`). Call before `RegisterTools`/`NewHTTPHandler`. Empty-string entries are ignored; `nil` clears. Precedence: programmatic > config `tool_descriptions` > built-in default. Concurrency-safe. |
 | `StartIdleGC(ctx context.Context)` | Start the idle-session GC + transcript-sweep goroutine. Cancel `ctx` to stop and reclaim all sessions. |
 | `Shutdown()` | Close all sessions and reclaim child process groups (idempotent). |
@@ -52,10 +55,11 @@ func main() {
     // 1) Load config + session pool ("" = defaults)
     mcpserver.Init("config.toml")
 
-    // 2) terminal_url is built from config.listen_addr by default. If the socket
-    //    is owned by your host process (different address/port), point it at the
-    //    host's real reachable address, otherwise the web terminal link won't open.
-    mcpserver.SetAdvertiseAddr("10.0.0.5:8080")
+    // 2) Outward entry for terminal_url: it is a link a human clicks, so use your
+    //    single entry point (domain/VIP is fine) plus the prefix where you mount MCP.
+    //    The node-to-node dial address (SetSelfAddr) is unrelated and auto-detected
+    //    from listen_addr.
+    mcpserver.SetPublicBaseURL("https://mcp.example.com/mcp")
 
     // 3) Session idle-GC / transcript cleanup lifecycle
     ctx, cancel := context.WithCancel(context.Background())
@@ -98,9 +102,12 @@ log.Fatal(http.ListenAndServe(":8900", h))
   `http.StripPrefix("/view", TerminalHandler())` at `/view/terminal/`. The web
   frontend derives its SSE / WebSocket / takeover URLs from the page location
   (relative), so any mount prefix works without code changes. Keep `terminal_url`
-  (built by `SetAdvertiseAddr` + the mount path) consistent with where you mount.
-- **host:port** — set via `SetAdvertiseAddr` (used to build `terminal_url`); it does
-  **not** affect the path prefix.
+  (built by `SetPublicBaseURL` + the mount path) consistent with where you mount, and in
+  a multi-node deployment wrap `WithTerminalRouting` outside `StripPrefix`.
+- **outward entry** — set via `SetPublicBaseURL` (used to build `terminal_url`); a domain
+  or VIP is fine and it does **not** affect the path prefix.
+- **node dial address** — set via `SetSelfAddr` (node-to-node forwarding only);
+  auto-detected by default. The two never affect each other.
 
 ## Authorization (important)
 
@@ -123,7 +130,7 @@ Passed to `Init(configPath)`; TOML. All fields optional (sensible defaults).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `listen_addr` | `127.0.0.1:8900` | Bind address (standalone / `NewHTTPHandler`). For embedded use, prefer `SetAdvertiseAddr`. |
+| `listen_addr` | `127.0.0.1:8900` | Bind address (standalone / `NewHTTPHandler`). When embedded, set the outward entry via `SetPublicBaseURL` and the dial address via `SetSelfAddr`. |
 | `data_dir` | `./data` | Base dir for session transcripts (the `.raw` logs). |
 | `default_shell` | `bash` | Command for `mode=local` when none is given. |
 | `ssh_user` | (empty) | Required for `mode=ssh`. |

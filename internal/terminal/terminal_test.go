@@ -138,6 +138,9 @@ func TestTerminalStreamPushesScrollback(t *testing.T) {
 			return // found the buffered output pushed as scrollback
 		}
 	}
+	if err := sc.Err(); err != nil {
+		t.Fatalf("stream scan failed: %v; got %q", err, decoded)
+	}
 	t.Fatalf("stream did not deliver scrollback containing marker; got %q", decoded)
 }
 

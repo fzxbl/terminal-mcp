@@ -24,7 +24,10 @@ go get github.com/fzxbl/terminal-mcp
 | `Init(configPath string)` | 加载配置（`""` 用默认值）并初始化会话池。启动时最先调用一次。 |
 | `RegisterTools(server *mcp.Server, auditWriter io.Writer)` | 把全部 `terminal_*` 工具注册到你的官方 SDK server。`auditWriter` 可传 `nil`（不记审计，例如宿主已记录工具调用）。 |
 | `TerminalHandler() http.Handler` | 网页终端（人工接管）HTTP 处理器。按 `/terminal/` 前缀解析请求，可挂在 `/terminal/` 或用 `http.StripPrefix` 挂在任意前缀下。`RegisterTools` **不含**它。 |
-| `SetAdvertiseAddr(hostPort string)` | 覆盖拼 `terminal_url` 用的 `host:port`。当 socket 由宿主进程持有、其地址与本模块 `listen_addr` 不同时需要。传空恢复默认。并发安全。 |
+| `SetPublicBaseURL(base string)` | 设置 `terminal_url` 的对外入口，如 `https://mcp.example.com/mcp`。**可以是域名/VIP**：网页终端的属主在路径里，落到任意节点都会被 `WithTerminalRouting` 反代到属主。末尾 `/` 会去掉、缺 scheme 按 `http://` 补。传空恢复按 `listen_addr` 推导。并发安全。 |
+| `SetSelfAddr(hostPort string)` | 设置本节点**直连** `host:port`：编码进 `session_id`，只用于节点间反代拨号，不进任何对外文本。未设置时按 `listen_addr` 推导（通配 host 换成本机 IP）。与 `SetPublicBaseURL` 正交，顺序无关。 |
+| `WithSessionRouting(next http.Handler) http.Handler` | 包裹 **MCP handler**：`tools/call` 里的 `session_id` 属主非本机时整条反代过去。 |
+| `WithTerminalRouting(next http.Handler) http.Handler` | 包裹 **网页终端 handler**：属主在路径里（`…/terminal/<session_id>`），非本机则反代。必须包在 `http.StripPrefix` **外层**（转发保留原始路径）。多节点部署下少了它，(N-1)/N 的点击会看到「会话不存在」。 |
 | `SetToolDescriptions(over map[string]string)` | 按工具名覆盖对外暴露给模型的工具描述（key 如 `terminal_open`）。在 `RegisterTools`/`NewHTTPHandler` 之前调用。空串条目忽略，传 `nil` 清空。优先级：编程覆盖 > 配置文件 `tool_descriptions` > 内置默认。并发安全。 |
 | `StartIdleGC(ctx context.Context)` | 启动空闲会话 GC + transcript 清理协程。取消 `ctx` 即停止并回收所有会话。 |
 | `Shutdown()` | 关闭所有会话、回收子进程组（幂等）。 |
@@ -50,9 +53,10 @@ func main() {
     // 1) 加载配置 + 会话池（"" 用默认值）
     mcpserver.Init("config.toml")
 
-    // 2) terminal_url 默认按 config.listen_addr 拼。若 socket 由宿主进程持有
-    //    （地址/端口不同），指向宿主实际可达地址，否则网页终端链接打不开。
-    mcpserver.SetAdvertiseAddr("10.0.0.5:8080")
+    // 2) terminal_url 的对外入口：给人点的链接，填统一入口（域名/VIP 均可），
+    //    尾部带上你挂载 MCP 的前缀。节点间拨号地址（SetSelfAddr）与它无关，
+    //    默认由进程按 listen_addr 自动探测。
+    mcpserver.SetPublicBaseURL("https://mcp.example.com/mcp")
 
     // 3) 会话空闲 GC / transcript 清理生命周期
     ctx, cancel := context.WithCancel(context.Background())
@@ -92,9 +96,10 @@ log.Fatal(http.ListenAndServe(":8900", h))
 - **网页终端** —— handler 按 `/terminal/` 前缀解析请求。可挂在 `/terminal/`，也可用
   `http.StripPrefix` 先剥掉外层前缀后挂在任意路径（如 `http.StripPrefix("/view", ...)`
   挂在 `/view/terminal/`）。网页前端从页面地址推导 SSE / WebSocket / 接管的相对 URL，
-  任意挂载前缀都可用，无需改代码。注意让 `terminal_url`（由 `SetAdvertiseAddr` + 挂载路径拼成）
-  与实际挂载点一致。
-- **host:port** —— 用 `SetAdvertiseAddr` 指定（拼 `terminal_url` 用），**不影响路径前缀**。
+  任意挂载前缀都可用，无需改代码。注意让 `terminal_url`（由 `SetPublicBaseURL` + 挂载路径拼成）
+  与实际挂载点一致；多节点部署时把 `WithTerminalRouting` 包在 `StripPrefix` 外层。
+- **对外入口** —— 用 `SetPublicBaseURL` 指定（拼 `terminal_url` 用），可为域名/VIP。
+- **节点直连地址** —— 用 `SetSelfAddr` 指定（只用于节点间反代），默认自动探测。两者互不影响。
 
 ## 鉴权（重要）
 
@@ -114,7 +119,7 @@ log.Fatal(http.ListenAndServe(":8900", h))
 
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
-| `listen_addr` | `127.0.0.1:8900` | 绑定地址（独立 / `NewHTTPHandler`）。嵌入时优先用 `SetAdvertiseAddr`。 |
+| `listen_addr` | `127.0.0.1:8900` | 绑定地址（独立 / `NewHTTPHandler`）。嵌入时对外入口用 `SetPublicBaseURL`、直连地址用 `SetSelfAddr`。 |
 | `data_dir` | `./data` | 会话 transcript（`.raw` 日志）根目录。 |
 | `default_shell` | `bash` | `mode=local` 未给命令时用的 shell。 |
 | `ssh_user` | （空） | `mode=ssh` 必填。 |

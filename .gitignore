@@ -9,3 +9,7 @@ data/
 
 # test artifacts
 /tmp
+
+# Local design, plan, and article records.
+/docs/superpowers/
+/docs/juejin-terminal-mcp.zh-CN.md

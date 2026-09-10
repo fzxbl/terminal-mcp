@@ -6,6 +6,45 @@ import (
 	"testing"
 )
 
+// TestPublicBaseURLAndTerminalURL：terminal_url 用「对外入口 + 路径里的会话 id」拼成，
+// 对外入口与「节点间拨号地址」（自身直连地址）互不影响。
+//
+// 后一条是重点：对外入口与自身直连地址正交、互不影响，设置顺序无关——绝不能让「设置
+// 对外入口」顺带改写拨号地址，否则会拿着带路径的字符串去拨号。
+func TestPublicBaseURLAndTerminalURL(t *testing.T) {
+	t.Cleanup(func() { SetPublicBaseURL(""); SetSelfAddr(""); SetPathPrefix("") })
+
+	SetSelfAddr("10.0.0.1:8900") // 内部拨号地址
+	SetPathPrefix("/mcp")        // 宿主挂载前缀（唯一来源：MountWebTerminal）
+	SetPublicBaseURL("https://mcp.example.com/")
+	if got, want := terminalURL("sid-1"),
+		"https://mcp.example.com/mcp/view/terminal/sid-1"; got != want {
+		t.Errorf("terminalURL = %q, want %q（入口去掉末尾斜杠 + 挂载前缀 + 内部路径）", got, want)
+	}
+	if got := SelfAddrForRouting(); got != "10.0.0.1:8900" {
+		t.Errorf("设置对外入口把 自身直连地址 改成了 %q：两者必须正交", got)
+	}
+
+	// 只给 host:port 时按 http:// 补全（前缀仍由 SetPathPrefix 提供，不在 base 里拼）。
+	SetPublicBaseURL("10.1.2.3:8080")
+	if got, want := terminalURL("sid-2"), "http://10.1.2.3:8080/mcp/view/terminal/sid-2"; got != want {
+		t.Errorf("terminalURL = %q, want %q（缺 scheme 应补 http://）", got, want)
+	}
+
+	// 反过来：先设入口再设 自身直连地址，也不该互相污染。
+	SetPublicBaseURL("")
+	SetSelfAddr("")
+	SetPathPrefix("")
+	SetPublicBaseURL("http://vip.example.com")
+	SetSelfAddr("10.0.0.2:8900")
+	if got := SelfAddrForRouting(); got != "10.0.0.2:8900" {
+		t.Errorf("自身直连地址 = %q，want 10.0.0.2:8900", got)
+	}
+	if got, want := terminalURL("sid-3"), "http://vip.example.com/view/terminal/sid-3"; got != want {
+		t.Errorf("terminalURL = %q, want %q", got, want)
+	}
+}
+
 func TestURLHostPort(t *testing.T) {
 	// 非通配地址原样保留 host:port。
 	if got := urlHostPort("127.0.0.1:8900"); got != "127.0.0.1:8900" {
@@ -27,7 +66,7 @@ func TestURLHostPort(t *testing.T) {
 
 func TestListFilfersByOwner(t *testing.T) {
 	InitStore(10)
-	SetNodeToken("")
+	SetSelfAddr("")
 	a := &Session{ID: "a", Owner: "alice", Status: "ready"}
 	b := &Session{ID: "b", Owner: "bob", Status: "ready"}
 	theStore.add(a)

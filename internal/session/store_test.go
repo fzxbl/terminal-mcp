@@ -18,11 +18,11 @@ func TestNewSessionIDUnique(t *testing.T) {
 }
 
 func TestEncodeDecodeSessionID(t *testing.T) {
-	SetNodeToken("10.0.0.1:8900")
+	SetSelfAddr("10.0.0.1:8900")
 	id := newSessionID()
 	tok, uuid := decodeSessionID(id)
 	if tok != "10.0.0.1:8900" {
-		t.Fatalf("node token = %q", tok)
+		t.Fatalf("自身直连地址 = %q", tok)
 	}
 	if uuid == "" || uuid == id {
 		t.Fatalf("uuid part not extracted: %q", uuid)
@@ -30,7 +30,7 @@ func TestEncodeDecodeSessionID(t *testing.T) {
 }
 
 func TestDecodeLegacyID(t *testing.T) {
-	// 旧格式（纯 uuid，无分隔符）：node token 视为空。
+	// 旧格式（纯 uuid，无分隔符）：自身直连地址 视为空。
 	tok, uuid := decodeSessionID("bare-uuid-no-sep")
 	if tok != "" || uuid != "bare-uuid-no-sep" {
 		t.Fatalf("legacy decode got (%q,%q)", tok, uuid)

@@ -311,33 +311,35 @@ func (s *store) closeAll() {
 	}
 }
 
-// idSep 分隔 session_id 里的节点 token 与 uuid。host:port 与 uuid 均不含它。
+// idSep 分隔 session_id 里的节点直连地址与 uuid。host:port 与 uuid 均不含它。
 const idSep = "~"
 
-// nodeToken 是本节点对外可达地址（host:port），编码进 session_id 供跨节点路由。
-var nodeToken atomic.Value // string
+// selfDialAddr 是本节点对外可达地址（host:port），编码进 session_id 供跨节点路由。
+var selfDialAddr atomic.Value // string
 
-// SetNodeToken 设置本节点 token（对外可达 host:port）。空串则生成的 id 不带节点前缀（等价单机）。
-func SetNodeToken(tok string) { nodeToken.Store(tok) }
+// SetSelfAddr 设置本节点的**直连** host:port：它编码进 session_id，供跨节点反代判定属主
+// 与拨号，只走内网、不进任何对外文本。空串则生成的 id 不带节点前缀（等价单机）。
+// 给人点的链接用 SetPublicBaseURL，两者正交。
+func SetSelfAddr(hostPort string) { selfDialAddr.Store(hostPort) }
 
-func currentNodeToken() string {
-	t, _ := nodeToken.Load().(string)
-	return t
+func currentSelfAddr() string {
+	a, _ := selfDialAddr.Load().(string)
+	return a
 }
 
-// NodeTokenForRouting 返回本节点 token（host:port），供路由中间件判定"本机会话"。
-func NodeTokenForRouting() string { return currentNodeToken() }
+// SelfAddrForRouting 返回本节点直连 host:port，供路由中间件判定「本机会话」。
+func SelfAddrForRouting() string { return currentSelfAddr() }
 
-// newSessionID 生成 <nodeToken>~<uuid>；nodeToken 为空时退化为纯 uuid（单机兼容）。
+// newSessionID 生成 <本节点直连地址>~<uuid>；未设置直连地址时退化为纯 uuid（单机）。
 func newSessionID() string {
 	u := uuid.NewString()
-	if tok := currentNodeToken(); tok != "" {
-		return tok + idSep + u
+	if addr := currentSelfAddr(); addr != "" {
+		return addr + idSep + u
 	}
 	return u
 }
 
-// decodeSessionID 拆出节点 token 与 uuid。无分隔符（旧格式/非法）时 token 为空、uuid 为原串。
+// decodeSessionID 拆出节点直连地址与 uuid。无分隔符（单机格式/非法）时地址为空、uuid 为原串。
 func decodeSessionID(id string) (token, uuid string) {
 	if i := strings.Index(id, idSep); i >= 0 {
 		return id[:i], id[i+len(idSep):]

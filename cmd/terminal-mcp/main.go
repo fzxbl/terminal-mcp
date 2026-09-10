@@ -30,9 +30,9 @@ func main() {
 	session.InitStore(c.MaxSessions)
 
 	// 分布式：进程自动探测本机可达地址作为 session_id 的属主 token，无需每实例配不同地址
-	// （通配监听 0.0.0.0 会被解析为本机实际 IP）。跨 NAT/需对外映射时用 SetAdvertiseAddr 覆盖。
+	// （通配监听 0.0.0.0 会被解析为本机实际 IP）。跨 NAT/需对外映射时用 SetSelfAddr 覆盖。
 	if c.ListenAddr != "" {
-		mcpserver.SetNodeToken(session.ReachableHostPort(c.ListenAddr))
+		mcpserver.SetSelfAddr(session.ReachableHostPort(c.ListenAddr))
 	}
 	mcpserver.SetPeers(c.Peers)
 

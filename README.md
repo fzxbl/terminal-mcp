@@ -96,7 +96,7 @@ The agent opens a session, runs commands, and streams back results. If it needs 
 
 Copy `config.example.toml`. Highlights: `listen_addr`, `data_dir`, `default_shell`, `ssh_user`, `ssh_opts`, `shell_switch_commands` (commands that trigger auto re-arm — add your own, e.g. container-enter commands), `auto_rearm`, `max_buffer_bytes` (in-memory tail-cache cap; the full log lives on disk), `exec_output_max_bytes` (per-call return cap; larger results come back as an `output_ref` you inspect via `mode=explore`), `explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard` (server-side hard caps for explore results), `transcript_retention_days`, `log_dir` / `log_rotate` / `log_max_age_days`.
 
-**Transparent resource guardrails (`resource_limit_cmd`)**: a model-invisible `ulimit` injected alongside the sentinel at session start, and re-injected on every shell switch (`ssh`/`su`/`docker exec`/`matrix_jail` …) and on `hard` reset. A `ulimit` without `-S/-H` sets both soft and hard limits; the hard limit is inherited by child processes and can't be raised by unprivileged commands, so switching shells or running other commands can't escape the cap:
+**Transparent resource guardrails (`resource_limit_cmd`)**: a model-invisible `ulimit` injected alongside the sentinel at session start, and re-injected on every shell switch (`ssh`/`su`/`docker exec`/`chroot` …) and on `hard` reset. A `ulimit` without `-S/-H` sets both soft and hard limits; the hard limit is inherited by child processes and can't be raised by unprivileged commands, so switching shells or running other commands can't escape the cap:
 
 ```toml
 resource_limit_cmd = "ulimit -v 4194304; ulimit -t 600; ulimit -u 4096"
@@ -118,7 +118,7 @@ Already run an MCP server and want terminal tools on the same `/mcp`? `go get gi
 
 ```go
 mcpserver.Init("config.toml")
-mcpserver.SetAdvertiseAddr("10.0.0.5:8080") // host:port used to build terminal_url
+mcpserver.SetPublicBaseURL("https://mcp.example.com/mcp") // outward entry for terminal_url (domain/VIP is fine)
 mcpserver.SetToolDescriptions(map[string]string{ // optional: reword tool descriptions
     "terminal_open": "Open a persistent terminal session; returns session_id and a web terminal URL.",
 })
@@ -159,7 +159,7 @@ mode = "raw"                # raw | sha256
 on_missing = "reject"       # reject | allow_empty
 ```
 
-> Deployment notes: the identity header **must be injected by a trusted gateway** — nodes must not trust a client-supplied identity header. The owner address is auto-detected by the process (a wildcard `0.0.0.0` bind resolves to the machine's real IP), so every instance can share one config; only override via `SetAdvertiseAddr` (embedding API) when behind NAT or when an externally mapped address is required. `peers` can also be discovered dynamically via `SetPeerProvider`, making a distributed setup fully config-free.
+> Deployment notes: the identity header **must be injected by a trusted gateway** — nodes must not trust a client-supplied identity header. The owner address is auto-detected by the process (a wildcard `0.0.0.0` bind resolves to the machine's real IP), so every instance can share one config; only override via `SetSelfAddr` (embedding API) when behind NAT or when an externally mapped address is required. The human-facing `terminal_url` is set separately via `SetPublicBaseURL` (a domain/VIP is fine; with multiple nodes pair it with `WithTerminalRouting`, which proxies to the owner). `peers` can also be discovered dynamically via `SetPeerProvider`, making a distributed setup fully config-free.
 
 ## Security
 

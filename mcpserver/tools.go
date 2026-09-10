@@ -52,7 +52,7 @@ type exploreInput struct {
 
 type controlInput struct {
 	SessionID string `json:"session_id" jsonschema:"the session id"`
-	Key       string `json:"key" jsonschema:"control key or recovery action. Control keys (written to the PTY as the corresponding control byte): ctrl-c (SIGINT, interrupt the running command), ctrl-d (EOF, end input / exit a REPL or shell), ctrl-z (SIGTSTP, suspend to background), ctrl-\\ (SIGQUIT, quit with core), ctrl-l (clear screen), ctrl-u (erase to line start), ctrl-k (erase to line end), ctrl-a (move to line start), ctrl-e (move to line end), ctrl-w (erase previous word), ctrl-r (reverse history search), ctrl-g (bell / cancel current edit or search), tab (completion), esc (Escape), enter (Enter), backspace. Recovery actions: flush (drop queued input + clear the current line + Enter), hard (reopen the shell), rearm (re-inject the sentinel prompt after you switched into a new shell, e.g. after su/docker exec/matrix_jail, if the session appears stuck)."`
+	Key       string `json:"key" jsonschema:"control key or recovery action. Control keys (written to the PTY as the corresponding control byte): ctrl-c (SIGINT, interrupt the running command), ctrl-d (EOF, end input / exit a REPL or shell), ctrl-z (SIGTSTP, suspend to background), ctrl-\\ (SIGQUIT, quit with core), ctrl-l (clear screen), ctrl-u (erase to line start), ctrl-k (erase to line end), ctrl-a (move to line start), ctrl-e (move to line end), ctrl-w (erase previous word), ctrl-r (reverse history search), ctrl-g (bell / cancel current edit or search), tab (completion), esc (Escape), enter (Enter), backspace. Recovery actions: flush (drop queued input + clear the current line + Enter), hard (reopen the shell), rearm (re-inject the sentinel prompt after you switched into a new shell, e.g. after su/docker exec/chroot, if the session appears stuck)."`
 }
 
 type sessionIDInput struct {
@@ -98,7 +98,7 @@ const (
 		"ctrl-u / ctrl-k (erase to line start/end), ctrl-a / ctrl-e (move to line start/end), ctrl-w (erase word), " +
 		"ctrl-r (reverse search), ctrl-g (cancel), tab, esc, enter, backspace. " +
 		"Recovery actions: flush (drop queued input + clear the current line + Enter), hard (reopen the shell) and " +
-		"rearm (re-inject the sentinel prompt after you switched into a new shell, e.g. after su/docker exec/matrix_jail, if the session appears stuck). " +
+		"rearm (re-inject the sentinel prompt after you switched into a new shell, e.g. after su/docker exec/chroot, if the session appears stuck). " +
 		"If held=true the session is under human takeover: this call was NOT executed; wait until held clears."
 
 	descStatus = "Lightweight status query (empty output). Returns state, prompt, exit_code and held. " +

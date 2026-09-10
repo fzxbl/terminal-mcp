@@ -22,7 +22,7 @@ const (
 	defaultPtyCols uint16 = 1000
 )
 
-// TerminalHandler 提供只读、可滚动的网页终端，供人（值班/开发）实时观看模型在会话里的操作。
+// TerminalHandler 提供只读、可滚动的网页终端，供人（运维/开发）实时观看模型在会话里的操作。
 // 默认只读；点「人工接管」后经 WebSocket 转发按键到 PTY。
 //
 // handler 内部固定按 /terminal/ 前缀解析；若外围需要额外前缀（如 /view），

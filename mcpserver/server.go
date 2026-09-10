@@ -49,8 +49,8 @@ func NewHTTPHandler(auditWriter io.Writer) http.Handler {
 	a := audit.New(discardIfNil(auditWriter))
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", sessionRoutingMiddleware(newMCPStreamableHandler(a)))
-	// 外围加 /view 前缀：StripPrefix 剥掉后交给按 /terminal/ 解析的 handler。
-	mux.Handle("/view/terminal/", http.StripPrefix("/view", terminal.TerminalHandler()))
+	// 网页终端走与嵌入宿主同一条挂载入口（挂在根上），因此路径推导只有一处实现。
+	_ = MountWebTerminal("", func(pattern string, h http.Handler) { mux.Handle(pattern, h) })
 	return mux
 }
 
@@ -81,16 +81,22 @@ func discardIfNil(w io.Writer) io.Writer {
 // http.StripPrefix("/view", TerminalHandler()) at /view/terminal/. Call Init first.
 func TerminalHandler() http.Handler { return terminal.TerminalHandler() }
 
-// SetAdvertiseAddr overrides the host:port used to build the terminal_url returned
-// by terminal_open. Use it when embedding terminal-mcp behind another HTTP server
-// whose bind address differs from this module's listen_addr (the host process owns
-// the socket): set it to the host's real reachable host:port so the terminal_url is
-// clickable. Empty string restores the listen_addr-based default. Concurrency-safe.
-func SetAdvertiseAddr(hostPort string) { session.SetAdvertiseAddr(hostPort) }
+// SetPublicBaseURL sets the outward base address used to build the terminal_url
+// returned by terminal_open, e.g. "https://mcp.example.com/mcp" or
+// "http://10.1.2.3:8080/mcp". It is the entry a human clicks, so it may be a domain,
+// VIP or load-balancer address: the web terminal carries its owner in the path
+// (.../terminal/<session_id>), and any node receiving the request reverse-proxies it
+// to the owner (see WithTerminalRouting). A trailing "/" is trimmed and a missing
+// scheme defaults to http://. Empty string restores the listen_addr-based default.
+// Concurrency-safe.
+//
+// Orthogonal to SetSelfAddr, which is the replica's directly dialable host:port used
+// for node-to-node forwarding only. Neither writes the other; call order is irrelevant.
+func SetPublicBaseURL(base string) { session.SetPublicBaseURL(base) }
 
-// SetNodeToken 设置本节点对外可达地址（host:port），编码进 session_id 供跨节点路由。
-// 未设置时回退到 advertise addr / listen_addr。
-func SetNodeToken(hostPort string) { session.SetNodeToken(hostPort) }
+// SetSelfAddr 设置本节点对外可达地址（host:port），编码进 session_id 供跨节点路由。
+// 未设置时回退到 listen_addr（通配 host 会换成本机实际 IP，见 ReachableHostPort）。
+func SetSelfAddr(hostPort string) { session.SetSelfAddr(hostPort) }
 
 // SetPeers 设置 terminal_list 跨节点聚合的兄弟节点列表（host:port）。静态列表，通常来自配置。
 func SetPeers(p []string) { setPeers(p) }
