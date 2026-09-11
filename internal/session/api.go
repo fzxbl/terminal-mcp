@@ -24,7 +24,7 @@ var pathPrefix atomic.Value // string
 // SetPublicBaseURL 设置 terminal_url 的对外入口，形如 "https://mcp.example.com" 或
 // "http://10.1.2.3:8080"：**它是给人点的入口**，可以是域名/VIP/负载均衡地址，不必是本节点
 // 直连地址——网页终端的属主信息在路径里（…/terminal/<session_id>），落到任意节点都会被
-// mcpserver.WithTerminalRouting 反代到属主节点。
+// mcpserver.MountWebTerminal 注册的属主路由反代到属主节点。
 //
 // **不要在这里拼挂载前缀**：前缀由 MountWebTerminal 一次给出（宿主也只在那里说一次挂在哪），
 // 两处都写会拼出双份前缀。base 末尾的 "/" 会被去掉；没写 scheme 时按 http:// 补全。
