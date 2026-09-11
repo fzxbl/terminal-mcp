@@ -29,10 +29,10 @@ func TestEncodeDecodeSessionID(t *testing.T) {
 	}
 }
 
-func TestDecodeLegacyID(t *testing.T) {
-	// 旧格式（纯 uuid，无分隔符）：自身直连地址 视为空。
+func TestDecodeOwnerlessID(t *testing.T) {
+	// 单机未配置自身直连地址时，session_id 不带属主，路由应留在本地处理。
 	tok, uuid := decodeSessionID("bare-uuid-no-sep")
 	if tok != "" || uuid != "bare-uuid-no-sep" {
-		t.Fatalf("legacy decode got (%q,%q)", tok, uuid)
+		t.Fatalf("ownerless decode got (%q,%q)", tok, uuid)
 	}
 }

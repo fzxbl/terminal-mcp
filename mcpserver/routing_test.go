@@ -131,7 +131,7 @@ func TestTerminalRoutingProxiesToOwnerKeepingPath(t *testing.T) {
 	sid := owner + "~uuid-page"
 	path := terminalPath("/mcp", sid)
 	rec := httptest.NewRecorder()
-	WithTerminalRouting(next).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	withTerminalRouting(next).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("状态码 %d，want 204（属主的应答）", rec.Code)
@@ -169,7 +169,7 @@ func TestTerminalRoutingLocalCases(t *testing.T) {
 			if c.hdr {
 				req.Header.Set(forwardedHeader, "1")
 			}
-			WithTerminalRouting(next).ServeHTTP(httptest.NewRecorder(), req)
+			withTerminalRouting(next).ServeHTTP(httptest.NewRecorder(), req)
 			if !called {
 				t.Error("该请求应由本节点本地处理")
 			}

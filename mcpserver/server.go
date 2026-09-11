@@ -10,7 +10,6 @@ import (
 	"github.com/fzxbl/terminal-mcp/internal/audit"
 	"github.com/fzxbl/terminal-mcp/internal/config"
 	"github.com/fzxbl/terminal-mcp/internal/session"
-	"github.com/fzxbl/terminal-mcp/internal/terminal"
 )
 
 // serverName/serverVersion 为 MCP Implementation 元信息。
@@ -30,7 +29,7 @@ func Init(configPath string) {
 	setPeers(c.Peers)
 }
 
-// RegisterTools registers all terminal_* and terminal_spill_explore tools on the given
+// RegisterTools registers all terminal_* tools on the given
 // mcp.Server, letting you embed PTY terminal capabilities into your own MCP
 // server. Call Init first.
 //
@@ -73,20 +72,13 @@ func discardIfNil(w io.Writer) io.Writer {
 	return w
 }
 
-// TerminalHandler returns just the web terminal (human-takeover) HTTP handler,
-// which serves GET/POST/WebSocket under /terminal/. Use it when you embed
-// the tools via RegisterTools onto your own MCP server (which does NOT include
-// the web UI) and want to mount the terminal UI in your own router. Mount it at
-// /terminal/, or under any prefix by stripping it first, e.g.
-// http.StripPrefix("/view", TerminalHandler()) at /view/terminal/. Call Init first.
-func TerminalHandler() http.Handler { return terminal.TerminalHandler() }
-
 // SetPublicBaseURL sets the outward base address used to build the terminal_url
-// returned by terminal_open, e.g. "https://mcp.example.com/mcp" or
-// "http://10.1.2.3:8080/mcp". It is the entry a human clicks, so it may be a domain,
+// returned by terminal_open, e.g. "https://mcp.example.com" or
+// "http://10.1.2.3:8080". The mount prefix is supplied only to MountWebTerminal.
+// It is the entry a human clicks, so it may be a domain,
 // VIP or load-balancer address: the web terminal carries its owner in the path
 // (.../terminal/<session_id>), and any node receiving the request reverse-proxies it
-// to the owner (see WithTerminalRouting). A trailing "/" is trimmed and a missing
+// to the owner through MountWebTerminal. A trailing "/" is trimmed and a missing
 // scheme defaults to http://. Empty string restores the listen_addr-based default.
 // Concurrency-safe.
 //

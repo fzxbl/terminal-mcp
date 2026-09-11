@@ -12,7 +12,7 @@ import (
 // TestMountWebTerminalPrefixIsSingleSourceOfTruth：宿主只说一次「挂在哪」，
 // 挂载 pattern、terminal_url 里的路径、跨节点转发看到的路径必须全部同源。
 //
-// 三处（mount 路径、StripPrefix、SetPublicBaseURL 里的前缀）任一与其它不一致，现象就是
+// 三处（mount 路径、StripPrefix、terminal_url 路径）任一与其它不一致，现象就是
 // terminal_url 点开 404 或「会话不存在」，且只在多节点下暴露——所以这里一并锁死。
 func TestMountWebTerminalPrefixIsSingleSourceOfTruth(t *testing.T) {
 	t.Cleanup(func() {

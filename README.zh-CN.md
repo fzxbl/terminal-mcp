@@ -94,7 +94,7 @@ Agent 会开会话、跑命令、把结果流式带回。如果它需要输密�
 
 ## 配置
 
-复制 `config.example.toml`。要点：`listen_addr`、`data_dir`、`default_shell`、`ssh_user`、`ssh_opts`、`shell_switch_commands`（触发自动重新布哨的命令——可自行追加，如进容器命令）、`auto_rearm`、`max_buffer_bytes`（内存尾部缓存上限；完整日志落磁盘）、`exec_output_max_bytes`（单次返回上限；超出以 `output_ref` 返回，用 `mode=explore` 探索）、`explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard`（explore 结果的服务端硬上限）、`transcript_retention_days`、`log_dir` / `log_rotate` / `log_max_age_days`。
+复制 `config.example.toml`。要点：`listen_addr`、`data_dir`、`default_shell`、`ssh_user`、`ssh_opts`、`shell_switch_commands`（触发自动重新布哨的命令——可自行追加，如进容器命令）、`auto_rearm`、`max_buffer_bytes`（内存尾部缓存上限；完整日志落磁盘）、`exec_output_max_bytes`（单次返回上限；超出以 `output_ref` 返回，用 `terminal_explore` 探索）、`explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard`（explore 结果的服务端硬上限）、`transcript_retention_days`、`log_dir` / `log_rotate` / `log_max_age_days`。
 
 **透明资源护栏（`resource_limit_cmd`）**：配一条对模型隐藏的 `ulimit`，随哨兵在会话启动时注入，并在每次切进新一层 shell（`ssh`/`su`/`docker exec`/`chroot` …）与 `hard` reset 时自动重注入。`ulimit` 不带 `-S/-H` 时同时设软硬限，硬限被子进程继承，非特权命令无法调高，故切 shell、跑别的命令都逃不出上限：
 
@@ -118,17 +118,22 @@ terminal_send = "向会话输入一条命令并等待其结束，返回新增输
 
 ```go
 mcpserver.Init("config.toml")
-mcpserver.SetPublicBaseURL("https://mcp.example.com/mcp") // terminal_url 的对外入口（可填域名/VIP）
+mcpserver.SetPublicBaseURL("https://mcp.example.com") // terminal_url 的对外入口（可填域名/VIP）
 mcpserver.SetToolDescriptions(map[string]string{ // 可选：按自家话术改写工具描述
     "terminal_open": "打开一个持久终端会话并返回 session_id 与只读网页终端地址。",
 })
 mcpserver.StartIdleGC(ctx)
 
-mcpserver.RegisterTools(server, auditWriter)          // terminal_* 工具
-mux.Handle("/view/terminal/", http.StripPrefix("/view", mcpserver.TerminalHandler())) // 网页终端（人工接管）
+mcpserver.RegisterTools(server, auditWriter) // terminal_* 工具
+mux.Handle("/mcp", mcpserver.WithSessionRouting(mcpHandler))
+if err := mcpserver.MountWebTerminal("/mcp", func(pattern string, h http.Handler) {
+    mux.Handle(pattern, h)
+}); err != nil {
+    log.Fatal(err)
+}
 ```
 
-`/mcp` 路径由你决定；网页终端 handler 按 `/terminal/` 前缀解析，可挂在 `/terminal/`，也可用 `http.StripPrefix` 挂在任意前缀下（如 `/view/terminal/`）——前端从页面地址推导 SSE / WebSocket / 接管的相对 URL，任意挂载点都可用。工具描述也可用配置文件 `[tool_descriptions]` 覆盖（优先级：`SetToolDescriptions` > 配置文件 > 内置默认）。完整公开 API、共用 `/mcp` 的接入范式、路径约定、鉴权注意事项与配置说明见 **[docs/EMBEDDING.zh-CN.md](docs/EMBEDDING.zh-CN.md)**。
+`/mcp` 路径由你决定；网页终端通过 `MountWebTerminal(prefix, mount)` 和 MCP 端点共用同一个前缀，模块据此一次性推导路由、`terminal_url` 与跨副本转发目标。工具描述也可用配置文件 `[tool_descriptions]` 覆盖（优先级：`SetToolDescriptions` > 配置文件 > 内置默认）。完整公开 API、共用 `/mcp` 的接入范式、路径约定、鉴权注意事项与配置说明见 **[docs/EMBEDDING.zh-CN.md](docs/EMBEDDING.zh-CN.md)**。
 
 ## 分布式部署与横向扩展
 
@@ -157,7 +162,7 @@ mode = "raw"                # raw | sha256
 on_missing = "reject"       # reject | allow_empty
 ```
 
-> 部署要点：身份头**只能由可信网关注入**，节点不应直接信任客户端自带的该头。属主地址默认由进程自动探测（把通配 `0.0.0.0` 解析为本机实际 IP），因此各实例可共用同一份配置；仅当跨 NAT/需对外映射地址时，才用嵌入接口 `SetSelfAddr` 显式覆盖；给人点的 `terminal_url` 另由 `SetPublicBaseURL` 指定（可填域名/VIP，多节点下配合 `WithTerminalRouting` 反代到属主）。`peers` 也可用 `SetPeerProvider` 动态发现，做到分布式下完全免配置。
+> 部署要点：身份头**只能由可信网关注入**，节点不应直接信任客户端自带的该头。属主地址默认由进程自动探测（把通配 `0.0.0.0` 解析为本机实际 IP），因此各实例可共用同一份配置；仅当跨 NAT/需对外映射地址时，才用嵌入接口 `SetSelfAddr` 显式覆盖；给人点的 `terminal_url` 另由 `SetPublicBaseURL` 指定，网页终端必须通过 `MountWebTerminal` 挂载，才能在多节点下反代到属主。`peers` 也可用 `SetPeerProvider` 动态发现，做到分布式下完全免配置。
 
 ## 安全
 

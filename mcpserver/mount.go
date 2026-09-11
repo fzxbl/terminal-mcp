@@ -30,7 +30,7 @@ import (
 //		router.HandleStd("ANY", pattern+"*", h)
 //	})
 //
-// 交出去的 handler 已经包好会话级路由（WithTerminalRouting）与前缀剥离，宿主不需要知道
+// 交出去的 handler 已经包好会话级路由与前缀剥离，宿主不需要知道
 // 本模块内部的路径结构。不要在 mount 里改写 pattern（再套一层前缀或 StripPrefix）：
 // terminal_url 与跨节点转发都按这里的 prefix 推导，改写就会脱节。
 //
@@ -44,7 +44,7 @@ func MountWebTerminal(prefix string, mount func(pattern string, h http.Handler))
 		return err
 	}
 	session.SetPathPrefix(prefix)
-	mount(prefix+webTerminalPattern, WithTerminalRouting(
+	mount(prefix+webTerminalPattern, withTerminalRouting(
 		http.StripPrefix(prefix+viewPrefix, terminal.TerminalHandler())))
 	return nil
 }

@@ -94,7 +94,7 @@ The agent opens a session, runs commands, and streams back results. If it needs 
 
 ## Configure
 
-Copy `config.example.toml`. Highlights: `listen_addr`, `data_dir`, `default_shell`, `ssh_user`, `ssh_opts`, `shell_switch_commands` (commands that trigger auto re-arm — add your own, e.g. container-enter commands), `auto_rearm`, `max_buffer_bytes` (in-memory tail-cache cap; the full log lives on disk), `exec_output_max_bytes` (per-call return cap; larger results come back as an `output_ref` you inspect via `mode=explore`), `explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard` (server-side hard caps for explore results), `transcript_retention_days`, `log_dir` / `log_rotate` / `log_max_age_days`.
+Copy `config.example.toml`. Highlights: `listen_addr`, `data_dir`, `default_shell`, `ssh_user`, `ssh_opts`, `shell_switch_commands` (commands that trigger auto re-arm — add your own, e.g. container-enter commands), `auto_rearm`, `max_buffer_bytes` (in-memory tail-cache cap; the full log lives on disk), `exec_output_max_bytes` (per-call return cap; larger results include an `output_ref` you inspect with `terminal_explore`), `explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard` (server-side hard caps for explore results), `transcript_retention_days`, `log_dir` / `log_rotate` / `log_max_age_days`.
 
 **Transparent resource guardrails (`resource_limit_cmd`)**: a model-invisible `ulimit` injected alongside the sentinel at session start, and re-injected on every shell switch (`ssh`/`su`/`docker exec`/`chroot` …) and on `hard` reset. A `ulimit` without `-S/-H` sets both soft and hard limits; the hard limit is inherited by child processes and can't be raised by unprivileged commands, so switching shells or running other commands can't escape the cap:
 
@@ -118,17 +118,22 @@ Already run an MCP server and want terminal tools on the same `/mcp`? `go get gi
 
 ```go
 mcpserver.Init("config.toml")
-mcpserver.SetPublicBaseURL("https://mcp.example.com/mcp") // outward entry for terminal_url (domain/VIP is fine)
+mcpserver.SetPublicBaseURL("https://mcp.example.com") // outward entry for terminal_url (domain/VIP is fine)
 mcpserver.SetToolDescriptions(map[string]string{ // optional: reword tool descriptions
     "terminal_open": "Open a persistent terminal session; returns session_id and a web terminal URL.",
 })
 mcpserver.StartIdleGC(ctx)
 
-mcpserver.RegisterTools(server, auditWriter)          // terminal_* tools
-mux.Handle("/view/terminal/", http.StripPrefix("/view", mcpserver.TerminalHandler())) // web terminal (human takeover)
+mcpserver.RegisterTools(server, auditWriter) // terminal_* tools
+mux.Handle("/mcp", mcpserver.WithSessionRouting(mcpHandler))
+if err := mcpserver.MountWebTerminal("/mcp", func(pattern string, h http.Handler) {
+    mux.Handle(pattern, h)
+}); err != nil {
+    log.Fatal(err)
+}
 ```
 
-`/mcp` path is yours to choose; the web terminal handler parses paths under `/terminal/` and can be mounted under any prefix by stripping it first (e.g. `/view/terminal/` via `http.StripPrefix("/view", ...)`) — the frontend derives its SSE/WebSocket/takeover URLs from the page location, so any mount works. Tool descriptions can also be overridden via the `[tool_descriptions]` config table (precedence: `SetToolDescriptions` > config > built-in default). See **[docs/EMBEDDING.md](docs/EMBEDDING.md)** for the full public API reference, the shared-`/mcp` integration pattern, path conventions, authorization notes, and the config reference.
+`/mcp` path is yours to choose; mount the web terminal with `MountWebTerminal(prefix, mount)` using the same prefix. The module derives the route, `terminal_url`, and cross-replica forwarding target from that single value. Tool descriptions can also be overridden via the `[tool_descriptions]` config table (precedence: `SetToolDescriptions` > config > built-in default). See **[docs/EMBEDDING.md](docs/EMBEDDING.md)** for the full public API reference, the shared-`/mcp` integration pattern, path conventions, authorization notes, and the config reference.
 
 ## Distributed deployment & horizontal scaling
 
@@ -159,7 +164,7 @@ mode = "raw"                # raw | sha256
 on_missing = "reject"       # reject | allow_empty
 ```
 
-> Deployment notes: the identity header **must be injected by a trusted gateway** — nodes must not trust a client-supplied identity header. The owner address is auto-detected by the process (a wildcard `0.0.0.0` bind resolves to the machine's real IP), so every instance can share one config; only override via `SetSelfAddr` (embedding API) when behind NAT or when an externally mapped address is required. The human-facing `terminal_url` is set separately via `SetPublicBaseURL` (a domain/VIP is fine; with multiple nodes pair it with `WithTerminalRouting`, which proxies to the owner). `peers` can also be discovered dynamically via `SetPeerProvider`, making a distributed setup fully config-free.
+> Deployment notes: the identity header **must be injected by a trusted gateway** — nodes must not trust a client-supplied identity header. The owner address is auto-detected by the process (a wildcard `0.0.0.0` bind resolves to the machine's real IP), so every instance can share one config; only override via `SetSelfAddr` (embedding API) when behind NAT or when an externally mapped address is required. The human-facing `terminal_url` is set separately via `SetPublicBaseURL`; mount the web terminal through `MountWebTerminal` so multi-node requests proxy to the owner. `peers` can also be discovered dynamically via `SetPeerProvider`, making a distributed setup fully config-free.
 
 ## Security
 

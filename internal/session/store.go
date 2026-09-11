@@ -339,7 +339,7 @@ func newSessionID() string {
 	return u
 }
 
-// decodeSessionID 拆出节点直连地址与 uuid。无分隔符（单机格式/非法）时地址为空、uuid 为原串。
+// decodeSessionID 拆出节点直连地址与 uuid。无分隔符时表示无属主的单机会话，地址为空、uuid 为原串。
 func decodeSessionID(id string) (token, uuid string) {
 	if i := strings.Index(id, idSep); i >= 0 {
 		return id[:i], id[i+len(idSep):]

@@ -24,11 +24,10 @@ go get github.com/fzxbl/terminal-mcp
 | --- | --- |
 | `Init(configPath string)` | Load config (`""` = defaults) and initialize the session pool. Call once at startup, before anything else. |
 | `RegisterTools(server *mcp.Server, auditWriter io.Writer)` | Register all `terminal_*` tools onto your official-SDK server. `auditWriter` may be `nil` (no audit; e.g. when the host already logs tool calls). |
-| `TerminalHandler() http.Handler` | The web terminal (human-takeover) HTTP handler. It parses paths under `/terminal/`; mount it at `/terminal/` or under any prefix via `http.StripPrefix`. `RegisterTools` does NOT include it. |
-| `SetPublicBaseURL(base string)` | Set the outward entry used to build `terminal_url`, e.g. `https://mcp.example.com/mcp`. **A domain or VIP is fine**: the web terminal carries its owner in the path, so any node receiving the request reverse-proxies it to the owner via `WithTerminalRouting`. A trailing `/` is trimmed; a missing scheme defaults to `http://`. Empty restores the `listen_addr`-based default. Concurrency-safe. |
+| `SetPublicBaseURL(base string)` | Set the outward entry used to build `terminal_url`, e.g. `https://mcp.example.com`. The mount prefix belongs solely to `MountWebTerminal`. **A domain or VIP is fine**: the mounted web terminal carries its owner in the path, so any node receiving the request reverse-proxies it to the owner. A trailing `/` is trimmed; a missing scheme defaults to `http://`. Empty restores the `listen_addr`-based default. Concurrency-safe. |
 | `SetSelfAddr(hostPort string)` | Set this node's **directly dialable** `host:port`. It is encoded into `session_id` and used only for node-to-node forwarding — never in outward text. Defaults to a value derived from `listen_addr` (a wildcard host resolves to the machine IP). Orthogonal to `SetPublicBaseURL`; call order is irrelevant. |
 | `WithSessionRouting(next http.Handler) http.Handler` | Wrap the **MCP handler**: when the `session_id` in a `tools/call` belongs to another node, the whole request is proxied there. |
-| `WithTerminalRouting(next http.Handler) http.Handler` | Wrap the **web terminal handler**: the owner is in the path (`…/terminal/<session_id>`), and a non-local owner is proxied. Must wrap **outside** `http.StripPrefix` (forwarding preserves the original path). Without it, in a multi-node deployment (N-1)/N of clicks show "session not found". |
+| `MountWebTerminal(prefix string, mount func(pattern string, h http.Handler)) error` | Mount the complete web terminal at `<prefix>/view/terminal/`; this is the only web-terminal entry point. It derives the route, `terminal_url` prefix, and owner routing from `prefix`. |
 | `SetToolDescriptions(over map[string]string)` | Override the model-facing tool descriptions by tool name (keys like `terminal_open`). Call before `RegisterTools`/`NewHTTPHandler`. Empty-string entries are ignored; `nil` clears. Precedence: programmatic > config `tool_descriptions` > built-in default. Concurrency-safe. |
 | `StartIdleGC(ctx context.Context)` | Start the idle-session GC + transcript-sweep goroutine. Cancel `ctx` to stop and reclaim all sessions. |
 | `Shutdown()` | Close all sessions and reclaim child process groups (idempotent). |
@@ -56,10 +55,10 @@ func main() {
     mcpserver.Init("config.toml")
 
     // 2) Outward entry for terminal_url: it is a link a human clicks, so use your
-    //    single entry point (domain/VIP is fine) plus the prefix where you mount MCP.
+    //    single entry point (domain/VIP is fine), without the mount prefix.
     //    The node-to-node dial address (SetSelfAddr) is unrelated and auto-detected
     //    from listen_addr.
-    mcpserver.SetPublicBaseURL("https://mcp.example.com/mcp")
+    mcpserver.SetPublicBaseURL("https://mcp.example.com")
 
     // 3) Session idle-GC / transcript cleanup lifecycle
     ctx, cancel := context.WithCancel(context.Background())
@@ -72,11 +71,15 @@ func main() {
     // ... register your own tools onto `server` here ...
     mcpserver.RegisterTools(server, nil) // terminal_* tools
 
-    // 5) Routing: /mcp -> your server; /view/terminal/ -> web terminal (human takeover)
+    // 5) Routing: mount the MCP endpoint and web terminal under one prefix.
     mux := http.NewServeMux()
-    mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
-        func(*http.Request) *mcp.Server { return server }, nil))
-    mux.Handle("/view/terminal/", http.StripPrefix("/view", mcpserver.TerminalHandler()))
+    mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+    mux.Handle("/mcp", mcpserver.WithSessionRouting(mcpHandler))
+    if err := mcpserver.MountWebTerminal("/mcp", func(pattern string, h http.Handler) {
+        mux.Handle(pattern, h)
+    }); err != nil {
+        log.Fatal(err)
+    }
     log.Fatal(http.ListenAndServe(":8080", mux))
 }
 ```
@@ -97,13 +100,9 @@ log.Fatal(http.ListenAndServe(":8900", h))
 - **`/mcp`** — you choose. `RegisterTools` only registers tools onto the
   `*mcp.Server`; it has nothing to do with the HTTP path. Mount your server's
   streamable handler at any path.
-- **web terminal** — the handler parses request paths under `/terminal/`. Mount it
-  at `/terminal/`, or under any prefix by stripping the prefix first, e.g.
-  `http.StripPrefix("/view", TerminalHandler())` at `/view/terminal/`. The web
-  frontend derives its SSE / WebSocket / takeover URLs from the page location
-  (relative), so any mount prefix works without code changes. Keep `terminal_url`
-  (built by `SetPublicBaseURL` + the mount path) consistent with where you mount, and in
-  a multi-node deployment wrap `WithTerminalRouting` outside `StripPrefix`.
+- **web terminal** — mount it only through `MountWebTerminal(prefix, mount)`. It
+  registers `<prefix>/view/terminal/`, and derives the web frontend path,
+  `terminal_url`, and multi-node owner routing from the same `prefix`.
 - **outward entry** — set via `SetPublicBaseURL` (used to build `terminal_url`); a domain
   or VIP is fine and it does **not** affect the path prefix.
 - **node dial address** — set via `SetSelfAddr` (node-to-node forwarding only);
@@ -144,7 +143,7 @@ Passed to `Init(configPath)`; TOML. All fields optional (sensible defaults).
 | `idle_ttl_minutes` | `30` | Idle session GC timeout. |
 | `transcript_retention_days` | `7` | How long `.raw` transcripts are kept. |
 | `max_buffer_bytes` | `8388608` (8 MiB) | In-memory tail-cache cap per session. The full session output is an append-only `.raw` log on disk (source of truth); memory keeps only the last this-many bytes and older bytes are read back from disk on demand. Bounds memory against runaway streaming output. |
-| `exec_output_max_bytes` | `1048576` (1 MiB) | Per-call return cap for `terminal_send`/`terminal_output`. Larger results come back truncated with a `range` `{from,to}`; page them with `terminal_output(mode=range, from, to)`. |
+| `exec_output_max_bytes` | `1048576` (1 MiB) | Per-call return cap for `terminal_send`/`terminal_output`. Larger results include an `output_ref`; inspect the fixed snapshot with `terminal_explore(op=stat|grep|read)`. |
 | `log_dir` | `log` | Audit + runtime log directory. |
 | `log_rotate` | `daily` | `daily` or `hourly` (time-based, not size-based). |
 | `log_max_age_days` | `30` | Rotated-log retention. |

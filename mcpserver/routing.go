@@ -20,24 +20,19 @@ const forwardedHeader = "X-Pty-Bridge-Forwarded"
 // 把它套在你的 MCP handler 外层即可：mux.Handle("/mcp", mcpserver.WithSessionRouting(myHandler))。
 // 本机 token 由 session.SelfAddrForRouting() 实时读取（须先经 SetSelfAddr 设定）。
 //
-// 网页终端（页面/SSE/WebSocket）不是 tools/call，用 WithTerminalRouting。
+// 网页终端（页面/SSE/WebSocket）不是 tools/call，由 MountWebTerminal 挂载。
 func WithSessionRouting(next http.Handler) http.Handler { return sessionRoutingMiddleware(next) }
 
-// WithTerminalRouting 用会话级路由包裹**网页终端** handler：属主信息就在路径里
+// withTerminalRouting 用会话级路由包裹**网页终端** handler：属主信息就在路径里
 // （…/terminal/<session_id>[/stream|/ws|/takeover]），属主非本机时把整条请求反代过去。
 //
 // 存在的理由：会话（PTY + 子进程）只活在开它的那个节点上，而 terminal_url 是给人点的——
 // 人的浏览器多半只能访问统一入口（域名/VIP），落到哪个节点是随机的。有了这条，terminal_url
 // 就不必写成「本节点直连地址」，直连地址退回只做节点间拨号。
 //
-// 用法：必须包在 http.StripPrefix **外层**，让转发看到的是原始路径——各节点是同一份二进制、
-// 挂载点相同，保留原路径才能打到属主上的同一个端点：
-//
-//	mux.Handle("/view/terminal/", mcpserver.WithTerminalRouting(
-//		http.StripPrefix("/view", mcpserver.TerminalHandler())))
-//
-// 不读 body，因此 GET（页面/SSE）、POST（接管态）、WebSocket 升级都适用。
-func WithTerminalRouting(next http.Handler) http.Handler {
+// 它只由 MountWebTerminal 装配，宿主不应自行组合网页终端路由。它不读 body，故 GET（页面/SSE）、
+// POST（接管态）、WebSocket 升级都适用。
+func withTerminalRouting(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(forwardedHeader) != "" {
 			next.ServeHTTP(w, r)

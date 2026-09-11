@@ -22,7 +22,7 @@ type Config struct {
 	QuietWindowMs           int    `toml:"quiet_window_ms"`
 	TailBytes               int    `toml:"tail_bytes"`
 
-	// explore（mode=explore）服务端硬上限：调用方传入更大值会被 clamp，不能扩大单次 MCP 返回体积。
+	// terminal_explore 服务端硬上限：调用方传入更大值会被 clamp，不能扩大单次 MCP 返回体积。
 	ExploreMaxBytesHard  int64 `toml:"explore_max_bytes_hard"`  // explore 正文单次返回硬上限，默认 128 KiB
 	ExploreReadLimitHard int   `toml:"explore_read_limit_hard"` // read 行数上限，默认 1000
 	ExploreGrepLimitHard int   `toml:"explore_grep_limit_hard"` // grep 匹配数上限，默认 500
