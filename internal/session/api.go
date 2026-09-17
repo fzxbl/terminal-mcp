@@ -175,6 +175,11 @@ func List(owner string) []map[string]string {
 			continue
 		}
 		st, _ := s.snapshotStatus()
+		if st == "ready" {
+			if live, _, _ := computeState(s); live == "dead" {
+				st = "dead"
+			}
+		}
 		held := "false"
 		if s.held() {
 			held = "true"

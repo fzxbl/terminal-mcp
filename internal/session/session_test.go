@@ -25,6 +25,93 @@ func openLocalReady(t *testing.T) string {
 	return ""
 }
 
+func waitForState(t *testing.T, id, want string) Envelope {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		env := Status(id)
+		if env.State == want {
+			return env
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	env := Status(id)
+	t.Fatalf("session %s state=%q, want %q", id, env.State, want)
+	return Envelope{}
+}
+
+func cleanupSessions(t *testing.T) {
+	t.Helper()
+	for _, item := range List("") {
+		Close(item["session_id"])
+	}
+}
+
+func TestExitedSessionStatusAndListConvergeOnDead(t *testing.T) {
+	InitStore(4)
+	t.Cleanup(func() { cleanupSessions(t) })
+
+	id := openLocalReady(t)
+	if env := Send(id, "exit 7", 5000); env.State != "dead" {
+		waitForState(t, id, "dead")
+	}
+	if got := Status(id).State; got != "dead" {
+		t.Fatalf("Status(%s).State = %q, want dead", id, got)
+	}
+
+	listed := List("")
+	if len(listed) != 1 {
+		t.Fatalf("List returned %d sessions, want 1: %v", len(listed), listed)
+	}
+	if got := listed[0]["status"]; got != "dead" {
+		t.Fatalf("List status = %q, want dead after PTY exit", got)
+	}
+}
+
+func TestDeadSessionsRemainUntilCloseAndCapacityRecovers(t *testing.T) {
+	InitStore(4)
+	t.Cleanup(func() { cleanupSessions(t) })
+
+	ids := make([]string, 0, 4)
+	for i := 0; i < 4; i++ {
+		id := openLocalReady(t)
+		ids = append(ids, id)
+		if env := Send(id, "exit", 5000); env.State != "dead" {
+			waitForState(t, id, "dead")
+		}
+	}
+
+	listed := List("")
+	if len(listed) != 4 {
+		t.Fatalf("List returned %d sessions, want four retained dead sessions: %v", len(listed), listed)
+	}
+	for _, item := range listed {
+		if got := item["status"]; got != "dead" {
+			t.Fatalf("List status for %s = %q, want dead", item["session_id"], got)
+		}
+	}
+	if id, err := OpenLocalForTest(); err == nil {
+		Close(id)
+		t.Fatal("fifth open succeeded while four dead sessions remained registered")
+	}
+
+	for _, id := range ids {
+		if env := Close(id); env.Error != "" || env.State != "dead" {
+			t.Fatalf("Close(%s) = %+v, want successful dead envelope", id, env)
+		}
+	}
+	if got := List(""); len(got) != 0 {
+		t.Fatalf("List after explicit closes = %v, want empty", got)
+	}
+
+	replacement := openLocalReady(t)
+	if env := Close(replacement); env.Error != "" || env.State != "dead" {
+		t.Fatalf("Close(replacement) = %+v, want successful dead envelope", env)
+	}
+	if got := List(""); len(got) != 0 {
+		t.Fatalf("final List = %v, want empty", got)
+	}
+}
+
 func TestSendReturnsCleanOutputAndExitCode(t *testing.T) {
 	id := openLocalReady(t)
 	defer Close(id)
