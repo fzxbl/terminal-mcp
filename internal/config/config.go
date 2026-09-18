@@ -126,7 +126,7 @@ func (c *Config) applyDefaults() {
 		c.OpenReadyTimeoutMinutes = 20
 	}
 	if c.SSHOpts == "" {
-		c.SSHOpts = "-tt -o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=4"
+		c.SSHOpts = "-tt -o LogLevel=error -o StrictHostKeyChecking=accept-new -o ConnectTimeout=4"
 	}
 	if c.MaxBlockSeconds <= 0 {
 		c.MaxBlockSeconds = 30

@@ -3,7 +3,9 @@ data_dir = "./data"
 # ssh 模式必填（无默认值）
 ssh_user = ""
 default_shell = "bash"
-ssh_opts = "-tt -o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=4"
+# SSH 主机密钥默认采用 accept-new（TOFU）：首次连接自动记录到正常 known_hosts，之后拒绝密钥变化。
+# 高保证环境应预先写入可信主机密钥，并改为 StrictHostKeyChecking=yes。
+ssh_opts = "-tt -o LogLevel=error -o StrictHostKeyChecking=accept-new -o ConnectTimeout=4"
 max_sessions = 2
 idle_ttl_minutes = 30
 max_block_seconds = 30

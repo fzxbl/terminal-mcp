@@ -123,7 +123,7 @@ log.Fatal(http.ListenAndServe(":8900", h))
 | `data_dir` | `./data` | 会话 transcript（`.raw` 日志）根目录。 |
 | `default_shell` | `bash` | `mode=local` 未给命令时用的 shell。 |
 | `ssh_user` | （空） | `mode=ssh` 必填。 |
-| `ssh_opts` | `-tt -o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=4` | 预设 SSH 参数；保留 `-tt`。 |
+| `ssh_opts` | `-tt -o LogLevel=error -o StrictHostKeyChecking=accept-new -o ConnectTimeout=4` | 预设 SSH 参数；保留 `-tt`。`accept-new` 属于首次信任（TOFU）：首次见到的主机密钥会写入正常的 `known_hosts`，之后拒绝密钥变化。高保证环境应预先配置可信主机密钥，并使用 `StrictHostKeyChecking=yes`。 |
 | `shell_switch_commands` | `ssh, su, sudo -i, sudo su, docker exec, kubectl exec, nsenter, chroot` | 触发切 shell 后自动重新布哨的命令；可追加（如进容器命令）。 |
 | `auto_rearm` | `true` | 切 shell 后自动重新布哨。`false` = 仅手动 `terminal_control(rearm)`。 |
 | `tool_descriptions` | （空） | 按工具名覆盖对外工具描述的 TOML 表（`[tool_descriptions]`，key 如 `terminal_open`）。缺省/空串沿用内置默认。也可用 `SetToolDescriptions` 以编程方式覆盖（优先级更高）。 |

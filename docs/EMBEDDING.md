@@ -133,7 +133,7 @@ Passed to `Init(configPath)`; TOML. All fields optional (sensible defaults).
 | `data_dir` | `./data` | Base dir for session transcripts (the `.raw` logs). |
 | `default_shell` | `bash` | Command for `mode=local` when none is given. |
 | `ssh_user` | (empty) | Required for `mode=ssh`. |
-| `ssh_opts` | `-tt -o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=4` | Preset SSH options; keep `-tt`. |
+| `ssh_opts` | `-tt -o LogLevel=error -o StrictHostKeyChecking=accept-new -o ConnectTimeout=4` | Preset SSH options; keep `-tt`. `accept-new` is trust-on-first-use (TOFU): it stores the first-seen key in the normal `known_hosts` file and rejects changed keys. For high-assurance environments, pre-provision trusted host keys and use `StrictHostKeyChecking=yes`. |
 | `shell_switch_commands` | `ssh, su, sudo -i, sudo su, docker exec, kubectl exec, nsenter, chroot` | Commands that trigger sentinel auto re-arm after switching shell. Append your own (e.g. a container-enter command). |
 | `auto_rearm` | `true` | Auto re-arm the sentinel after a shell switch. `false` = manual `terminal_control(rearm)` only. |
 | `tool_descriptions` | (empty) | TOML table (`[tool_descriptions]`, keys like `terminal_open`) overriding the model-facing tool descriptions. Missing/empty entries keep the built-in default. Can also be overridden programmatically via `SetToolDescriptions` (higher precedence). |
