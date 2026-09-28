@@ -171,7 +171,7 @@ func Open(mode, command, host, owner string) (map[string]string, error) {
 
 // Authorize checks both the existing owner signature and the per-session bearer capability.
 func Authorize(id, owner, capability string) bool {
-	if owner == "" || capability == "" || theStore == nil {
+	if capability == "" || theStore == nil {
 		return false
 	}
 	s := theStore.get(id)
@@ -183,11 +183,7 @@ func Authorize(id, owner, capability string) bool {
 
 // ValidCapability checks the per-session bearer capability for browser routes.
 func ValidCapability(id, capability string) bool {
-	if theStore == nil || capability == "" {
-		return false
-	}
-	s := theStore.get(id)
-	return s != nil && s.matchesCapability(capability)
+	return LookupWithCapability(id, capability) != nil
 }
 
 // List 列出本实例中属于 owner 的会话及状态快照。owner 为空则不过滤（内部/兼容用途）。

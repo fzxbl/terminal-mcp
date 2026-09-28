@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/fzxbl/terminal-mcp/internal/config"
+	"github.com/fzxbl/terminal-mcp/internal/identity"
 )
 
 func TestCapabilityAuthorizationAndHashStorage(t *testing.T) {
@@ -42,6 +44,27 @@ func TestCapabilityAuthorizationAndHashStorage(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprintf("%+v", *a), keyA) {
 		t.Fatal("plaintext capability found in Session state")
+	}
+}
+
+func TestAuthorizeAllowsEmptyOwnerOnlyWithCorrectCapability(t *testing.T) {
+	owner, ok := identity.New([]string{"X-MCP-USER"}, "raw", "allow_empty").Signature(http.Header{})
+	if !ok || owner != "" {
+		t.Fatalf("allow_empty identity signature = (%q,%v), want empty and allowed", owner, ok)
+	}
+	const key = "allow-empty-owner-capability"
+	s := &Session{ID: "empty-owner", Owner: owner}
+	s.setCapability(key)
+	InitStore(2)
+	theStore.add(s)
+	if !Authorize(s.ID, owner, key) {
+		t.Fatal("empty stored owner with allow_empty signature and correct capability must authorize")
+	}
+	if Authorize(s.ID, owner, "wrong-capability") {
+		t.Fatal("wrong capability must not authorize empty owner")
+	}
+	if Authorize(s.ID, owner, "") {
+		t.Fatal("missing capability must not authorize empty owner")
 	}
 }
 

@@ -278,6 +278,16 @@ func (s *store) get(id string) *Session {
 	return s.m[id]
 }
 
+func (s *store) getWithCapability(id, capability string) *Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.m[id]
+	if sess == nil || !sess.matchesCapability(capability) {
+		return nil
+	}
+	return sess
+}
+
 func (s *store) remove(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

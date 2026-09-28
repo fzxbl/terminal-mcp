@@ -369,6 +369,32 @@ func TestStreamHistoricalWhenClosed(t *testing.T) {
 	}
 }
 
+func TestRemovedSessionCannotPanicOrReadTranscript(t *testing.T) {
+	id := openLocalReady(t)
+	defer session.Close(id)
+	key := testKey(id)
+	const marker = "gc_private_transcript_marker"
+	if env := session.Send(id, "echo "+marker, 3000); env.Error != "" {
+		t.Fatalf("prepare transcript: %s", env.Error)
+	}
+	session.Close(id)
+	session.InitStore(10) // simulate idle GC/restart removing the hash-bearing session record
+
+	for _, suffix := range []string{"/stream", "/takeover", "/ws"} {
+		req := httptest.NewRequest(http.MethodGet, "/terminal/"+id+suffix, nil)
+		if suffix == "/ws" {
+			req.Header.Set("Sec-WebSocket-Protocol", "terminal-capability."+key)
+		} else {
+			req.Header.Set("X-Terminal-Capability", key)
+		}
+		rr := httptest.NewRecorder()
+		TerminalHandler().ServeHTTP(rr, req)
+		if rr.Code != http.StatusNotFound || strings.Contains(rr.Body.String(), marker) {
+			t.Errorf("removed session %s response: status=%d body=%q", suffix, rr.Code, rr.Body.String())
+		}
+	}
+}
+
 func TestTakeoverRejectedWhenClosed(t *testing.T) {
 	id, key, _ := session.OpenLocalForTestWithCapability()
 	session.Close(id)

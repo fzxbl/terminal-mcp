@@ -64,11 +64,11 @@ func TerminalHandler() http.Handler {
 // serveTerminalStream 以 SSE 推送会话输出：连接时先发全部已有 scrollback，之后每 200ms 发增量。
 // 原始字节（含 ANSI）经 base64 编码承载，避免 SSE 行分隔破坏二进制/多字节内容，前端解码后渲染。
 func serveTerminalStream(w http.ResponseWriter, req *http.Request, id string) {
-	if !session.ValidCapability(id, req.Header.Get("X-Terminal-Capability")) {
+	sess := session.LookupWithCapability(id, req.Header.Get("X-Terminal-Capability"))
+	if sess == nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	sess := session.Lookup(id)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -78,8 +78,8 @@ func serveTerminalStream(w http.ResponseWriter, req *http.Request, id string) {
 	// 无 live proc（关闭/死亡/进程重启）：从 transcript 文件推全量历史，标记 disconnected，结束。
 	if !sess.Live() {
 		data, has := session.ReadTranscript(id)
-		if !has && sess == nil {
-			http.Error(w, "session not found: "+id, http.StatusNotFound)
+		if !has {
+			http.Error(w, "session not found", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -140,13 +140,9 @@ func serveTerminalStream(w http.ResponseWriter, req *http.Request, id string) {
 //	on=true 时若已被他人接管则返回 409（保证同一时刻仅一人可接管）；
 //	on=false 时若非持有者则返回 409（只有持有者能释放）。浏览器 hold-owner 校验与 capability 分开。
 func serveTakeover(w http.ResponseWriter, req *http.Request, id string) {
-	if !session.ValidCapability(id, req.Header.Get("X-Terminal-Capability")) {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
-	sess := session.Lookup(id)
+	sess := session.LookupWithCapability(id, req.Header.Get("X-Terminal-Capability"))
 	if sess == nil {
-		http.Error(w, "session not found: "+id, http.StatusNotFound)
+		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
 	writeState := func(code int, held, mine bool) {
@@ -215,13 +211,9 @@ var wsUpgrader = websocket.Upgrader{
 // 帧为 JSON：{"t":"in","d":"<按键字节>"} 写入 PTY；{"t":"resize","cols":C,"rows":R} 同步窗口大小。
 func serveTerminalInput(w http.ResponseWriter, req *http.Request, id string) {
 	capability := websocketCapability(req)
-	if !session.ValidCapability(id, capability) {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
-	sess := session.Lookup(id)
+	sess := session.LookupWithCapability(id, capability)
 	if sess == nil {
-		http.Error(w, "session not found: "+id, http.StatusNotFound)
+		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
 	if !sess.Live() {
