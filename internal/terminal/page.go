@@ -4,20 +4,16 @@ package terminal
 // 用 xterm.js（真正的终端模拟器）渲染 SSE 推来的原始字节流：光标、行编辑（退格）、颜色、
 // 光标定位、备用屏（vim/top/less）都能正确处理。人点「人工接管」后进入可输入态，
 // xterm 的 onData 把按键字节经 WebSocket 送回 PTY，并同步窗口尺寸；退出接管即恢复只读。
-// xterm 资源走 CDN（内网可达）；模型侧 ssh_read 的清洗是后端逻辑，与本页渲染无关。
+// xterm 与 addon 资源由本服务从内嵌的固定版本文件提供；模型侧 ssh_read 的清洗是后端逻辑，与本页渲染无关。
 const terminalPageHTML = `<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>terminal-mcp terminal __SESSION_ID__</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fira-code@5/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/hack@5/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/source-code-pro@5/index.css">
-<style>
+<base href="./">
+<link rel="stylesheet" href="assets/xterm-6.0.0.css">
+<style nonce="__CSP_NONCE__">
   :root{
     --bg:#1e1e2e; --bar:#181825; --termbg:#1e1e2e; --border:#313244;
     --text:#cdd6f4; --muted:#7f849c; --accent:#89b4fa; --glow:rgba(137,180,250,0.16);
@@ -166,10 +162,10 @@ const terminalPageHTML = `<!DOCTYPE html>
   </button>
 </div>
 <div id="term"><div id="termbody"></div></div>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/lib/xterm.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/lib/addon-fit.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.19.0/lib/addon-webgl.js"></script>
-<script>
+<script nonce="__CSP_NONCE__" src="assets/xterm-6.0.0.js"></script>
+<script nonce="__CSP_NONCE__" src="assets/addon-fit-0.11.0.js"></script>
+<script nonce="__CSP_NONCE__" src="assets/addon-webgl-0.19.0.js"></script>
+<script nonce="__CSP_NONCE__">
 (function(){
   var id = "__SESSION_ID__";
   var sessionKey = new URLSearchParams(location.hash.slice(1)).get("key") || "";

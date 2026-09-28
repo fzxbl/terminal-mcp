@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -130,6 +131,9 @@ func TestTerminalPageServed(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	page := string(body)
+	if regexp.MustCompile(`(?i)(?:src|href)\s*=\s*["']https?://|url\(\s*["']?https?://|@import\s+(?:url\()?\s*["']?https?://`).MatchString(page) {
+		t.Fatal("rendered terminal page contains an external HTTP(S) asset URL")
+	}
 	if !strings.Contains(page, id) {
 		t.Fatalf("page missing session id: %q", page[:min(200, len(page))])
 	}
@@ -138,6 +142,35 @@ func TestTerminalPageServed(t *testing.T) {
 	}
 	if !strings.Contains(page, "location.hash.slice(1)") || !strings.Contains(page, "X-Terminal-Capability") || !strings.Contains(page, "terminal-capability.") {
 		t.Fatal("page does not read fragment capability and send it to protected requests")
+	}
+	for _, localAsset := range []string{"assets/xterm-6.0.0.css", "assets/xterm-6.0.0.js", "assets/addon-fit-0.11.0.js", "assets/addon-webgl-0.19.0.js"} {
+		if !strings.Contains(page, localAsset) {
+			t.Errorf("page does not reference local asset %q", localAsset)
+		}
+	}
+	csp := resp.Header.Get("Content-Security-Policy")
+	directives := strings.Split(csp, ";")
+	if csp == "" || len(directives) <= 5 || !strings.Contains(directives[5], "script-src 'nonce-") || strings.Contains(directives[5], "unsafe-inline") {
+		t.Fatalf("page CSP does not restrict executable script to the per-response nonce: %q", csp)
+	}
+	if strings.Count(page, `nonce="`) < 4 || !strings.Contains(page, `<base href="./">`) {
+		t.Fatal("page inline script nonce or relative asset base missing")
+	}
+}
+
+func TestTerminalAssetsServedFromEmbeddedFiles(t *testing.T) {
+	srv := httptest.NewServer(TerminalHandler())
+	defer srv.Close()
+	for _, asset := range []string{"xterm-6.0.0.css", "xterm-6.0.0.js", "addon-fit-0.11.0.js", "addon-webgl-0.19.0.js"} {
+		resp, err := http.Get(srv.URL + "/terminal/assets/" + asset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || len(data) == 0 || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("asset %s: status=%d bytes=%d nosniff=%q", asset, resp.StatusCode, len(data), resp.Header.Get("X-Content-Type-Options"))
+		}
 	}
 }
 

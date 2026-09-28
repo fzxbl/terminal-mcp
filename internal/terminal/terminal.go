@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,10 @@ func TerminalHandler() http.Handler {
 		rest = strings.Trim(rest, "/")
 		if rest == "" {
 			http.Error(w, "missing session id", http.StatusBadRequest)
+			return
+		}
+		if name, ok := strings.CutPrefix(rest, "assets/"); ok {
+			serveTerminalAsset(w, req, name)
 			return
 		}
 		if id, ok := strings.CutSuffix(rest, "/stream"); ok {
@@ -277,7 +282,7 @@ func websocketCapability(req *http.Request) string {
 	return ""
 }
 
-// serveTerminalPage 返回自包含的终端页面（无外部依赖，适配内网）。
+// serveTerminalPage 返回加载本服务内嵌资源的终端页面（无需第三方运行时依赖）。
 func serveTerminalPage(w http.ResponseWriter, id string) {
 	if session.Lookup(id) == nil {
 		if _, ok := session.ReadTranscript(id); !ok {
@@ -286,9 +291,19 @@ func serveTerminalPage(w http.ResponseWriter, id string) {
 		}
 	}
 	cfg := config.Get()
+	nonceBytes := make([]byte, 18)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		http.Error(w, "failed to initialize terminal page", http.StatusInternalServerError)
+		return
+	}
+	nonce := base64.StdEncoding.EncodeToString(nonceBytes)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'nonce-"+nonce+"'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store") // 页面内嵌 JS 随版本变化，禁缓存避免浏览器用旧页
 	page := strings.ReplaceAll(terminalPageHTML, "__SESSION_ID__", id)
+	page = strings.ReplaceAll(page, "__CSP_NONCE__", nonce)
 	page = strings.ReplaceAll(page, "__DEFAULT_FONT__", cfg.DefaultFont)
 	page = strings.ReplaceAll(page, "__DEFAULT_FSIZE__", fmt.Sprintf("%d", cfg.DefaultFontSize))
 	page = strings.ReplaceAll(page, "__DEFAULT_THEME__", cfg.DefaultTheme)

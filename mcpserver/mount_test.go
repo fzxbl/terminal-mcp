@@ -59,6 +59,12 @@ func TestMountWebTerminalPrefixIsSingleSourceOfTruth(t *testing.T) {
 	if rec.Code != http.StatusNoContent || ownerHit != 1 {
 		t.Fatalf("经挂载路径的跨节点请求没被反代：code=%d ownerHit=%d", rec.Code, ownerHit)
 	}
+
+	asset := httptest.NewRecorder()
+	mux.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/mcp/view/terminal/assets/xterm-6.0.0.css", nil))
+	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), ".xterm") {
+		t.Fatalf("vendored asset failed through mounted prefix: code=%d", asset.Code)
+	}
 }
 
 // TestMountWebTerminalRejectsBadPrefix：前缀写错必须报错且一条路由都不挂，
