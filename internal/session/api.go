@@ -1,6 +1,8 @@
 package session
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"strconv"
@@ -61,7 +63,7 @@ func normalizeBaseURL(base string) string {
 // terminalURL 拼只读终端页地址（TerminalHandler 提供该页面）：对外入口 + 宿主挂载前缀 +
 // 本模块内部的 /view/terminal/ + id。入口优先取 SetPublicBaseURL，否则回退 listen_addr
 // （host 为通配 0.0.0.0/:: 时换成本机实际 IP，保证可点）。
-func terminalURL(id string) string {
+func terminalURL(id, capability string) string {
 	base, _ := publicBase.Load().(string)
 	if base == "" {
 		if addr := config.Get().ListenAddr; addr != "" {
@@ -71,7 +73,7 @@ func terminalURL(id string) string {
 	if base == "" {
 		return ""
 	}
-	return base + PathPrefix() + "/view/terminal/" + id
+	return base + PathPrefix() + "/view/terminal/" + id + "#key=" + capability
 }
 
 // urlHostPort 把 listen_addr 归一为可访问的 host:port：通配 host 换成本机 IP，其余原样返回。
@@ -151,17 +153,41 @@ func Open(mode, command, host, owner string) (map[string]string, error) {
 	}
 	name, args := BuildStartArgs(mode, hostOrCommand)
 	id := newSessionID()
-	if _, err := startSessionTracked(id, host, mode, name, args); err != nil {
-		return nil, err
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("generate session capability: %w", err)
 	}
-	if s := theStore.get(id); s != nil {
-		s.Owner = owner
+	capability := base64.RawURLEncoding.EncodeToString(secret)
+	if _, err := startSessionTracked(id, host, mode, name, args, owner, capability); err != nil {
+		return nil, err
 	}
 	return map[string]string{
 		"session_id":   id,
+		"session_key":  capability,
 		"state":        "loading",
-		"terminal_url": terminalURL(id),
+		"terminal_url": terminalURL(id, capability),
 	}, nil
+}
+
+// Authorize checks both the existing owner signature and the per-session bearer capability.
+func Authorize(id, owner, capability string) bool {
+	if owner == "" || capability == "" || theStore == nil {
+		return false
+	}
+	s := theStore.get(id)
+	if s == nil || s.Owner != owner {
+		return false
+	}
+	return s.matchesCapability(capability)
+}
+
+// ValidCapability checks the per-session bearer capability for browser routes.
+func ValidCapability(id, capability string) bool {
+	if theStore == nil || capability == "" {
+		return false
+	}
+	s := theStore.get(id)
+	return s != nil && s.matchesCapability(capability)
 }
 
 // List 列出本实例中属于 owner 的会话及状态快照。owner 为空则不过滤（内部/兼容用途）。
@@ -171,10 +197,13 @@ func List(owner string) []map[string]string {
 	}
 	var out []map[string]string
 	for _, s := range theStore.list() {
+		st, _ := s.snapshotStatus()
+		if st == "closed" {
+			continue
+		}
 		if owner != "" && s.Owner != owner {
 			continue
 		}
-		st, _ := s.snapshotStatus()
 		held := "false"
 		if s.held() {
 			held = "true"

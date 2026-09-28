@@ -21,6 +21,10 @@ func TestTwoNodeReverseProxyThroughHandler(t *testing.T) {
 	var aHit atomic.Bool
 	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		aHit.Store(true)
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"session_key":"route-capability"`) {
+			t.Errorf("proxied request changed or dropped session capability: %s", body)
+		}
 		if r.Header.Get(forwardedHeader) != "1" {
 			t.Errorf("proxied request to A missing forwarded header")
 		}
@@ -38,7 +42,7 @@ func TestTwoNodeReverseProxyThroughHandler(t *testing.T) {
 	defer nodeB.Close()
 
 	// 向 B 发一个属主为 A 的 session_id 的 tools/call。
-	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"terminal_status","arguments":{"session_id":"` + aHost + `~uuid-x"}}}`
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"terminal_status","arguments":{"session_id":"` + aHost + `~uuid-x","session_key":"route-capability"}}}`
 	req, _ := http.NewRequest(http.MethodPost, nodeB.URL+"/mcp", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")

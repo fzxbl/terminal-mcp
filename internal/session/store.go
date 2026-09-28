@@ -1,6 +1,8 @@
 package session
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,19 +18,20 @@ var theStore *store
 
 // Session 是一个持久会话。live 句柄 proc 只在内存；元信息可落盘。
 type Session struct {
-	ID         string
-	Owner      string // 客户端归属签名（见 internal/identity）；空表示无归属（历史/匿名）
-	Host       string
-	Mode       string
-	Status     string // loading | ready | dead | closed
-	Err        string
-	CreatedAt  time.Time
-	lastUsed   time.Time
-	proc       *pty.ProcSession
-	reopenName string     // hard reset 重开用的 exec 名
-	reopenArgs []string   // hard reset 重开用的 exec 参数
-	mu         sync.Mutex // 串行化单会话内 send
-	stateMu    sync.Mutex // 守护 Status/Err/lastUsed/deliveredOffset
+	ID             string
+	Owner          string   // 客户端归属签名（见 internal/identity）；空表示无归属（历史/匿名）
+	capabilityHash [32]byte // bearer capability hash; plaintext is returned only by Open
+	Host           string
+	Mode           string
+	Status         string // loading | ready | dead | closed
+	Err            string
+	CreatedAt      time.Time
+	lastUsed       time.Time
+	proc           *pty.ProcSession
+	reopenName     string     // hard reset 重开用的 exec 名
+	reopenArgs     []string   // hard reset 重开用的 exec 参数
+	mu             sync.Mutex // 串行化单会话内 send
+	stateMu        sync.Mutex // 守护 Status/Err/lastUsed/deliveredOffset
 
 	deliveredOffset int64 // since_last 交付游标
 
@@ -52,6 +55,18 @@ type Session struct {
 	takeoverStart  int64
 	takeoverEnd    int64
 	takeoverActive bool
+}
+
+func (s *Session) setCapability(capability string) {
+	s.capabilityHash = sha256.Sum256([]byte(capability))
+}
+
+func (s *Session) matchesCapability(capability string) bool {
+	if capability == "" {
+		return false
+	}
+	h := sha256.Sum256([]byte(capability))
+	return subtle.ConstantTimeCompare(s.capabilityHash[:], h[:]) == 1
 }
 
 // setStatus 加 stateMu 写 Status/Err（errMsg 为空时不覆盖 Err）。
@@ -242,7 +257,13 @@ func InitStore(maxSessions int) { theStore = newStore(maxSessions) }
 func (s *store) add(sess *Session) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.m) >= s.max {
+	active := 0
+	for _, existing := range s.m {
+		if status, _ := existing.snapshotStatus(); status != "closed" {
+			active++
+		}
+	}
+	if active >= s.max {
 		return false
 	}
 	sess.CreatedAt = time.Now()

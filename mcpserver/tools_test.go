@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -26,6 +27,22 @@ func TestRegisterToolsSchemas(t *testing.T) {
 	}()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "terminal-mcp-test", Version: "test"}, nil)
 	registerTools(srv, audit.New(io.Discard))
+}
+
+func TestFanoutListStripsCapabilities(t *testing.T) {
+	got := fanoutList([]map[string]string{{"session_id": "s", "session_key": "secret", "host": "h"}}, nil, nil, "")
+	if len(got) != 1 || got[0]["session_key"] != "" || got[0]["capability_hash"] != "" || got[0]["host"] != "h" {
+		t.Fatalf("fanout list exposed capability or lost fields: %#v", got)
+	}
+}
+
+func TestSessionCapabilityIsNeverAudited(t *testing.T) {
+	const secret = "audit-must-not-contain-this-key"
+	var buf bytes.Buffer
+	logEnv(audit.New(&buf), nil, "terminal_status", map[string]any{"session_id": "s", "session_key": secret}, session.Envelope{State: "idle"})
+	if strings.Contains(buf.String(), secret) {
+		t.Fatalf("audit output contains session capability: %s", buf.String())
+	}
 }
 
 // TestExploreToolSchemaSplit 校验 explore 已拆成独立工具：terminal_explore 的输入 schema
@@ -76,6 +93,12 @@ func TestExploreToolSchemaSplit(t *testing.T) {
 	for _, f := range []string{"output_ref", "op", "pattern"} {
 		if strings.Contains(rd, `"`+f+`":`) {
 			t.Fatalf("terminal_output schema should no longer contain %q: %s", f, rd)
+		}
+	}
+	for _, name := range []string{"terminal_send", "terminal_output", "terminal_explore", "terminal_control", "terminal_status", "terminal_close"} {
+		schema, ok := schemas[name]
+		if !ok || !strings.Contains(schema, "session_key") {
+			t.Fatalf("%s schema missing session_key: %s", name, schema)
 		}
 	}
 }
@@ -145,7 +168,7 @@ func TestOwnerSigFromHeader(t *testing.T) {
 
 func TestAuthorizeOwnerUnknownSession(t *testing.T) {
 	session.InitStore(10)
-	if authorizeOwner("alice", "no-such-id") {
+	if authorizeOwner("alice", "no-such-id", "") {
 		t.Fatalf("unknown session must not authorize")
 	}
 }

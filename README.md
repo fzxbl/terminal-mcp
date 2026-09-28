@@ -69,7 +69,7 @@ Then just ask your agent:
 
 > "Open a terminal, ssh into staging, tail the service log, and tell me why it's 500ing."
 
-The agent opens a session, runs commands, and streams back results. If it needs a password or you want to intervene, open the returned `terminal_url` and take over — the agent waits, watches, and resumes.
+The agent opens a session, retains the returned `session_key`, runs commands, and streams back results. If it needs a password or you want to intervene, open the returned `terminal_url` and take over — the key is carried in the URL fragment, and the agent waits, watches, and resumes.
 
 ## Human takeover, in 20 seconds
 
@@ -83,13 +83,13 @@ The agent opens a session, runs commands, and streams back results. If it needs 
 
 | Tool | What it does |
 | --- | --- |
-| `terminal_open(mode, command?, host?)` | Start a persistent PTY session. `mode=local` or `mode=ssh`. Returns `session_id` + `terminal_url`. |
-| `terminal_send(session_id, input, wait_ms?)` | Type a command, wait for it to settle. Returns output, state, exit_code. |
-| `terminal_output(session_id, wait_ms?, mode?)` | Observe live output. `tail` (peek at the screen; doesn't advance the cursor) or `since_last` (full increment since last call; advances the cursor; also the record of human-takeover commands). |
-| `terminal_explore(session_id, output_ref, op, line_offset?, limit?, pattern?, before?, after?, max_bytes?, byte_offset?)` | Inspect an oversized result (the `output_ref` returned when `terminal_send`/`since_last` truncates) without paging it all. `op=stat` (size/line count), `op=grep` with `pattern`/`before`/`after` to locate, `op=read` with `line_offset`/`limit` (negative `line_offset` reads from the end). Read-only; doesn't advance the cursor. |
-| `terminal_control(session_id, key)` | Send control keys (`ctrl-c`, `ctrl-d`, `ctrl-z`, …) or recovery actions (`flush`, `hard`, `rearm`). |
-| `terminal_status(session_id)` | Lightweight state / prompt / exit_code / held query. |
-| `terminal_close(session_id)` | Close the session, reclaim the process group. |
+| `terminal_open(mode, command?, host?)` | Start a persistent PTY session. Returns `session_id`, one-time `session_key`, and `terminal_url`. |
+| `terminal_send(session_id, session_key, input, wait_ms?)` | Type a command, wait for it to settle. Returns output, state, exit_code. |
+| `terminal_output(session_id, session_key, wait_ms?, mode?)` | Observe live output. `tail` (peek at the screen; doesn't advance the cursor) or `since_last` (full increment since last call; advances the cursor; also the record of human-takeover commands). |
+| `terminal_explore(session_id, session_key, output_ref, op, line_offset?, limit?, pattern?, before?, after?, max_bytes?, byte_offset?)` | Inspect an oversized result (the `output_ref` returned when `terminal_send`/`since_last` truncates) without paging it all. `op=stat` (size/line count), `op=grep` with `pattern`/`before`/`after` to locate, `op=read` with `line_offset`/`limit` (negative `line_offset` reads from the end). Read-only; doesn't advance the cursor. |
+| `terminal_control(session_id, session_key, key)` | Send control keys (`ctrl-c`, `ctrl-d`, `ctrl-z`, …) or recovery actions (`flush`, `hard`, `rearm`). |
+| `terminal_status(session_id, session_key)` | Lightweight state / prompt / exit_code / held query. |
+| `terminal_close(session_id, session_key)` | Close the session, reclaim the process group. |
 | `terminal_list()` | List active sessions. |
 
 ## Configure
