@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -14,6 +16,55 @@ import (
 	"github.com/fzxbl/terminal-mcp/internal/config"
 	"github.com/fzxbl/terminal-mcp/internal/session"
 )
+
+type ownerHeaderTransport struct {
+	owner string
+}
+
+func (t ownerHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header = req.Header.Clone()
+	clone.Header.Set("X-MCP-USER", t.owner)
+	return http.DefaultTransport.RoundTrip(clone)
+}
+
+func connectOwnerClient(t *testing.T, endpoint, owner string) *mcp.ClientSession {
+	t.Helper()
+	client := mcp.NewClient(&mcp.Implementation{Name: "terminal-mcp-test", Version: "test"}, nil)
+	cs, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:             endpoint,
+		HTTPClient:           &http.Client{Transport: ownerHeaderTransport{owner: owner}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect owner %q: %v", owner, err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+func callClose(t *testing.T, cs *mcp.ClientSession, id string) session.Envelope {
+	t.Helper()
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "terminal_close",
+		Arguments: sessionIDInput{SessionID: id},
+	})
+	if err != nil {
+		t.Fatalf("terminal_close(%q): %v", id, err)
+	}
+	if res.IsError {
+		t.Fatalf("terminal_close(%q) returned MCP tool error: %+v", id, res.Content)
+	}
+	b, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal terminal_close(%q) structured result: %v", id, err)
+	}
+	var env session.Envelope
+	if err := json.Unmarshal(b, &env); err != nil {
+		t.Fatalf("decode terminal_close(%q) structured result: %v", id, err)
+	}
+	return env
+}
 
 // TestRegisterToolsSchemas 确保所有工具都能成功注册。官方 SDK 在注册时校验
 // input/output schema（输出必须是 object），非法 schema 会 panic——本测试作为回归护栏，
@@ -147,5 +198,48 @@ func TestAuthorizeOwnerUnknownSession(t *testing.T) {
 	session.InitStore(10)
 	if authorizeOwner("alice", "no-such-id") {
 		t.Fatalf("unknown session must not authorize")
+	}
+}
+
+func TestCloseIsIdempotentAndNonDisclosingAtMCPBoundary(t *testing.T) {
+	Init("")
+	session.InitStore(10)
+	theSigner = nil
+
+	opened, err := session.Open("local", "", "", "alice")
+	if err != nil {
+		t.Fatalf("open alice session: %v", err)
+	}
+	id := opened["session_id"]
+	t.Cleanup(func() { session.Close(id) })
+	for i := 0; i < 200 && session.Status(id).State != "idle"; i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := session.Status(id).State; got != "idle" {
+		t.Fatalf("alice session state = %q, want idle", got)
+	}
+
+	httpServer := httptest.NewServer(NewHTTPHandler(nil))
+	t.Cleanup(httpServer.Close)
+	alice := connectOwnerClient(t, httpServer.URL+"/mcp", "alice")
+	bob := connectOwnerClient(t, httpServer.URL+"/mcp", "bob")
+
+	unauthorized := callClose(t, bob, id)
+	if got := session.Status(id).State; got != "idle" {
+		t.Fatalf("unauthorized close changed alice session state to %q", got)
+	}
+	unknown := callClose(t, bob, "does-not-exist")
+	if unauthorized != unknown {
+		t.Errorf("unauthorized close disclosed session existence: unauthorized=%+v unknown=%+v", unauthorized, unknown)
+	}
+	if unauthorized.State != "dead" || unauthorized.Error != "" {
+		t.Errorf("unauthorized/unknown close = %+v, want successful no-op dead envelope", unauthorized)
+	}
+
+	if first := callClose(t, alice, id); first.State != "dead" || first.Error != "" {
+		t.Fatalf("first close = %+v, want successful dead envelope", first)
+	}
+	if second := callClose(t, alice, id); second.State != "dead" || second.Error != "" {
+		t.Fatalf("second close = %+v, want successful no-op dead envelope", second)
 	}
 }
