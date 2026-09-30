@@ -1,6 +1,22 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestDefaultSSHOptsPreserveHostKeyVerification(t *testing.T) {
+	c := Load("")
+	if !strings.Contains(c.SSHOpts, "StrictHostKeyChecking=accept-new") {
+		t.Fatalf("SSHOpts default must use accept-new host-key policy, got %q", c.SSHOpts)
+	}
+	if strings.Contains(c.SSHOpts, "StrictHostKeyChecking=no") {
+		t.Fatalf("SSHOpts default must not disable host-key checking: %q", c.SSHOpts)
+	}
+	if strings.Contains(c.SSHOpts, "UserKnownHostsFile=/dev/null") {
+		t.Fatalf("SSHOpts default must persist known host keys: %q", c.SSHOpts)
+	}
+}
 
 func TestDefaults(t *testing.T) {
 	c := Load("")
