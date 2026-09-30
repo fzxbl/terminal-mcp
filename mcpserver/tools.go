@@ -267,8 +267,13 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_close", Description: resolveDesc("terminal_close")},
 		func(_ context.Context, req *mcp.CallToolRequest, in sessionIDInput) (*mcp.CallToolResult, session.Envelope, error) {
 			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
+			if !ok {
 				env := session.Envelope{State: "dead", Error: "session not found"}
+				logEnv(a, req, "terminal_close", map[string]any{"session_id": in.SessionID}, env)
+				return nil, env, nil
+			}
+			if !authorizeOwner(owner, in.SessionID, in.SessionKey) {
+				env := session.Envelope{State: "dead"}
 				logEnv(a, req, "terminal_close", map[string]any{"session_id": in.SessionID}, env)
 				return nil, env, nil
 			}

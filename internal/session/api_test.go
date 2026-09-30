@@ -42,7 +42,7 @@ func TestCapabilityAuthorizationAndHashStorage(t *testing.T) {
 	if got := a.capabilityHash; got != sha256.Sum256([]byte(keyA)) {
 		t.Fatal("session does not contain the SHA-256 capability hash")
 	}
-	if strings.Contains(fmt.Sprintf("%+v", *a), keyA) {
+	if strings.Contains(fmt.Sprintf("%+v", a), keyA) {
 		t.Fatal("plaintext capability found in Session state")
 	}
 }
@@ -92,7 +92,7 @@ func TestOpenIssuesUniqueOneTimeCapabilityAndFragmentURL(t *testing.T) {
 		t.Fatalf("terminal URL must carry capability only in fragment: %q", a["terminal_url"])
 	}
 	s := Lookup(a["session_id"])
-	if s == nil || s.capabilityHash != sha256.Sum256([]byte(keyA)) || strings.Contains(fmt.Sprintf("%+v", *s), keyA) {
+	if s == nil || s.capabilityHash != sha256.Sum256([]byte(keyA)) || strings.Contains(fmt.Sprintf("%+v", s), keyA) {
 		t.Fatal("Session must contain only the capability hash")
 	}
 }
