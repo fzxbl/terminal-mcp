@@ -1,10 +1,101 @@
 package session
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/fzxbl/terminal-mcp/internal/config"
+	"github.com/fzxbl/terminal-mcp/internal/identity"
 )
+
+func TestCapabilityAuthorizationAndHashStorage(t *testing.T) {
+	keyABytes := make([]byte, 32)
+	keyBBytes := make([]byte, 32)
+	for i := range keyABytes {
+		keyABytes[i], keyBBytes[i] = byte(i+1), byte(i+33)
+	}
+	keyA := base64.RawURLEncoding.EncodeToString(keyABytes)
+	keyB := base64.RawURLEncoding.EncodeToString(keyBBytes)
+	a := &Session{ID: "cap-a", Owner: "same-account"}
+	b := &Session{ID: "cap-b", Owner: "same-account"}
+	a.setCapability(keyA)
+	b.setCapability(keyB)
+	InitStore(10)
+	theStore.add(a)
+	theStore.add(b)
+	if !Authorize(a.ID, a.Owner, keyA) {
+		t.Fatal("correct owner and key should authorize")
+	}
+	for _, tc := range []struct{ id, owner, key string }{
+		{a.ID, a.Owner, ""}, {a.ID, a.Owner, keyB}, {a.ID, "other", keyA},
+		{b.ID, b.Owner, keyA}, {"missing", a.Owner, keyA},
+	} {
+		if Authorize(tc.id, tc.owner, tc.key) {
+			t.Fatalf("unexpected authorization for id=%q owner=%q key=%q", tc.id, tc.owner, tc.key)
+		}
+	}
+	if got := a.capabilityHash; got != sha256.Sum256([]byte(keyA)) {
+		t.Fatal("session does not contain the SHA-256 capability hash")
+	}
+	if strings.Contains(fmt.Sprintf("%+v", a), keyA) {
+		t.Fatal("plaintext capability found in Session state")
+	}
+}
+
+func TestAuthorizeAllowsEmptyOwnerOnlyWithCorrectCapability(t *testing.T) {
+	owner, ok := identity.New([]string{"X-MCP-USER"}, "raw", "allow_empty").Signature(http.Header{})
+	if !ok || owner != "" {
+		t.Fatalf("allow_empty identity signature = (%q,%v), want empty and allowed", owner, ok)
+	}
+	const key = "allow-empty-owner-capability"
+	s := &Session{ID: "empty-owner", Owner: owner}
+	s.setCapability(key)
+	InitStore(2)
+	theStore.add(s)
+	if !Authorize(s.ID, owner, key) {
+		t.Fatal("empty stored owner with allow_empty signature and correct capability must authorize")
+	}
+	if Authorize(s.ID, owner, "wrong-capability") {
+		t.Fatal("wrong capability must not authorize empty owner")
+	}
+	if Authorize(s.ID, owner, "") {
+		t.Fatal("missing capability must not authorize empty owner")
+	}
+}
+
+func TestOpenIssuesUniqueOneTimeCapabilityAndFragmentURL(t *testing.T) {
+	config.Load("")
+	SetPublicBaseURL("http://127.0.0.1:1")
+	t.Cleanup(func() { SetPublicBaseURL("") })
+	InitStore(4)
+	a, err := Open("local", "", "", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open("local", "", "", "owner")
+	if err != nil {
+		Close(a["session_id"])
+		t.Fatal(err)
+	}
+	defer Close(a["session_id"])
+	defer Close(b["session_id"])
+	keyA, keyB := a["session_key"], b["session_key"]
+	if len(keyA) < 43 || len(keyB) < 43 || keyA == keyB {
+		t.Fatalf("capabilities must be unique 256-bit values: lengths=%d,%d equal=%v", len(keyA), len(keyB), keyA == keyB)
+	}
+	if !strings.HasSuffix(a["terminal_url"], "#key="+keyA) || strings.Contains(strings.Split(a["terminal_url"], "#")[0], keyA) {
+		t.Fatalf("terminal URL must carry capability only in fragment: %q", a["terminal_url"])
+	}
+	s := Lookup(a["session_id"])
+	if s == nil || s.capabilityHash != sha256.Sum256([]byte(keyA)) || strings.Contains(fmt.Sprintf("%+v", s), keyA) {
+		t.Fatal("Session must contain only the capability hash")
+	}
+}
 
 // TestPublicBaseURLAndTerminalURL：terminal_url 用「对外入口 + 路径里的会话 id」拼成，
 // 对外入口与「节点间拨号地址」（自身直连地址）互不影响。
@@ -17,8 +108,8 @@ func TestPublicBaseURLAndTerminalURL(t *testing.T) {
 	SetSelfAddr("10.0.0.1:8900") // 内部拨号地址
 	SetPathPrefix("/mcp")        // 宿主挂载前缀（唯一来源：MountWebTerminal）
 	SetPublicBaseURL("https://mcp.example.com/")
-	if got, want := terminalURL("sid-1"),
-		"https://mcp.example.com/mcp/view/terminal/sid-1"; got != want {
+	if got, want := terminalURL("sid-1", "key123"),
+		"https://mcp.example.com/mcp/view/terminal/sid-1#key=key123"; got != want {
 		t.Errorf("terminalURL = %q, want %q（入口去掉末尾斜杠 + 挂载前缀 + 内部路径）", got, want)
 	}
 	if got := SelfAddrForRouting(); got != "10.0.0.1:8900" {
@@ -27,7 +118,7 @@ func TestPublicBaseURLAndTerminalURL(t *testing.T) {
 
 	// 只给 host:port 时按 http:// 补全（前缀仍由 SetPathPrefix 提供，不在 base 里拼）。
 	SetPublicBaseURL("10.1.2.3:8080")
-	if got, want := terminalURL("sid-2"), "http://10.1.2.3:8080/mcp/view/terminal/sid-2"; got != want {
+	if got, want := terminalURL("sid-2", "key456"), "http://10.1.2.3:8080/mcp/view/terminal/sid-2#key=key456"; got != want {
 		t.Errorf("terminalURL = %q, want %q（缺 scheme 应补 http://）", got, want)
 	}
 
@@ -40,7 +131,7 @@ func TestPublicBaseURLAndTerminalURL(t *testing.T) {
 	if got := SelfAddrForRouting(); got != "10.0.0.2:8900" {
 		t.Errorf("自身直连地址 = %q，want 10.0.0.2:8900", got)
 	}
-	if got, want := terminalURL("sid-3"), "http://vip.example.com/view/terminal/sid-3"; got != want {
+	if got, want := terminalURL("sid-3", "key789"), "http://vip.example.com/view/terminal/sid-3#key=key789"; got != want {
 		t.Errorf("terminalURL = %q, want %q", got, want)
 	}
 }
@@ -75,6 +166,11 @@ func TestListFilfersByOwner(t *testing.T) {
 	got := List("alice")
 	if len(got) != 1 || got[0]["session_id"] != "a" {
 		t.Fatalf("List(alice) = %v", got)
+	}
+	for _, key := range []string{"session_key", "capability", "capability_hash"} {
+		if _, ok := got[0][key]; ok {
+			t.Fatalf("List exposed %q: %v", key, got[0])
+		}
 	}
 }
 

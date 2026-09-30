@@ -44,7 +44,7 @@ func peerList() []string {
 func fanoutList(local []map[string]string, peerHosts []string, hdr http.Header, owner string) []map[string]string {
 	agg := map[string]map[string]string{}
 	for _, s := range local {
-		agg[s["session_id"]] = s
+		agg[s["session_id"]] = stripCapabilities(s)
 	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -54,7 +54,7 @@ func fanoutList(local []map[string]string, peerHosts []string, hdr http.Header, 
 			defer wg.Done()
 			for _, s := range queryPeerList(host, hdr) {
 				mu.Lock()
-				agg[s["session_id"]] = s
+				agg[s["session_id"]] = stripCapabilities(s)
 				mu.Unlock()
 			}
 		}(host)
@@ -63,6 +63,16 @@ func fanoutList(local []map[string]string, peerHosts []string, hdr http.Header, 
 	out := make([]map[string]string, 0, len(agg))
 	for _, s := range agg {
 		out = append(out, s)
+	}
+	return out
+}
+
+func stripCapabilities(s map[string]string) map[string]string {
+	out := make(map[string]string, len(s))
+	for k, v := range s {
+		if k != "session_key" && k != "capability" && k != "capability_hash" {
+			out[k] = v
+		}
 	}
 	return out
 }

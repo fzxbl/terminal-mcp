@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -30,14 +31,18 @@ const (
 //
 //	GET  /terminal/<id>          -> 内嵌渲染器的 HTML 页面
 //	GET  /terminal/<id>/stream   -> SSE，先推全量 scrollback 再持续推增量
-//	GET  /terminal/<id>/takeover -> 返回当前接管态；POST 置/清接管态
-//	GET  /terminal/<id>/ws       -> WebSocket，接管态下转发按键/resize 到 PTY
+//	GET  /terminal/<id>/takeover -> 持 capability 返回当前接管态；POST 置/清接管态
+//	GET  /terminal/<id>/ws       -> capability subprotocol 鉴权后，接管态下转发按键/resize 到 PTY
 func TerminalHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		rest := strings.TrimPrefix(req.URL.Path, "/terminal/")
 		rest = strings.Trim(rest, "/")
 		if rest == "" {
 			http.Error(w, "missing session id", http.StatusBadRequest)
+			return
+		}
+		if name, ok := strings.CutPrefix(rest, "assets/"); ok {
+			serveTerminalAsset(w, req, name)
 			return
 		}
 		if id, ok := strings.CutSuffix(rest, "/stream"); ok {
@@ -59,7 +64,11 @@ func TerminalHandler() http.Handler {
 // serveTerminalStream 以 SSE 推送会话输出：连接时先发全部已有 scrollback，之后每 200ms 发增量。
 // 原始字节（含 ANSI）经 base64 编码承载，避免 SSE 行分隔破坏二进制/多字节内容，前端解码后渲染。
 func serveTerminalStream(w http.ResponseWriter, req *http.Request, id string) {
-	sess := session.Lookup(id)
+	sess := session.LookupWithCapability(id, req.Header.Get("X-Terminal-Capability"))
+	if sess == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -69,8 +78,8 @@ func serveTerminalStream(w http.ResponseWriter, req *http.Request, id string) {
 	// 无 live proc（关闭/死亡/进程重启）：从 transcript 文件推全量历史，标记 disconnected，结束。
 	if !sess.Live() {
 		data, has := session.ReadTranscript(id)
-		if !has && sess == nil {
-			http.Error(w, "session not found: "+id, http.StatusNotFound)
+		if !has {
+			http.Error(w, "session not found", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -125,15 +134,15 @@ func serveTerminalStream(w http.ResponseWriter, req *http.Request, id string) {
 }
 
 // serveTakeover 查询/切换会话的人工接管标志，并做单人持有校验。
-// GET ?owner=<浏览器签名> 返回 {held, mine}（mine=当前接管是否为本浏览器持有），供新窗口加载/轮询同步 UI。
+// 所有请求先校验 session capability。GET ?owner=<浏览器签名> 返回 {held, mine}（mine=当前接管是否为本浏览器持有），供新窗口加载/轮询同步 UI。
 // POST body {"on":true|false, "owner":..., "cols":..., "rows":...} 置/清接管：
 //
 //	on=true 时若已被他人接管则返回 409（保证同一时刻仅一人可接管）；
-//	on=false 时若非持有者则返回 409（只有持有者能释放）。无鉴权（与只读页同信任模型）。
+//	on=false 时若非持有者则返回 409（只有持有者能释放）。浏览器 hold-owner 校验与 capability 分开。
 func serveTakeover(w http.ResponseWriter, req *http.Request, id string) {
-	sess := session.Lookup(id)
+	sess := session.LookupWithCapability(id, req.Header.Get("X-Terminal-Capability"))
 	if sess == nil {
-		http.Error(w, "session not found: "+id, http.StatusNotFound)
+		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
 	writeState := func(code int, held, mine bool) {
@@ -201,9 +210,10 @@ var wsUpgrader = websocket.Upgrader{
 // serveTerminalInput 接受浏览器 WebSocket 的接管输入。仅 held=true 时可用。
 // 帧为 JSON：{"t":"in","d":"<按键字节>"} 写入 PTY；{"t":"resize","cols":C,"rows":R} 同步窗口大小。
 func serveTerminalInput(w http.ResponseWriter, req *http.Request, id string) {
-	sess := session.Lookup(id)
+	capability := websocketCapability(req)
+	sess := session.LookupWithCapability(id, capability)
 	if sess == nil {
-		http.Error(w, "session not found: "+id, http.StatusNotFound)
+		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
 	if !sess.Live() {
@@ -253,7 +263,18 @@ func serveTerminalInput(w http.ResponseWriter, req *http.Request, id string) {
 	}
 }
 
-// serveTerminalPage 返回自包含的终端页面（无外部依赖，适配内网）。
+// websocketCapability reads the bearer key from a WebSocket subprotocol offered by
+// the browser. This keeps it out of the URL while satisfying the browser WebSocket API.
+func websocketCapability(req *http.Request) string {
+	for _, protocol := range websocket.Subprotocols(req) {
+		if key, ok := strings.CutPrefix(protocol, "terminal-capability."); ok {
+			return key
+		}
+	}
+	return ""
+}
+
+// serveTerminalPage 返回加载本服务内嵌资源的终端页面（无需第三方运行时依赖）。
 func serveTerminalPage(w http.ResponseWriter, id string) {
 	if session.Lookup(id) == nil {
 		if _, ok := session.ReadTranscript(id); !ok {
@@ -262,9 +283,19 @@ func serveTerminalPage(w http.ResponseWriter, id string) {
 		}
 	}
 	cfg := config.Get()
+	nonceBytes := make([]byte, 18)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		http.Error(w, "failed to initialize terminal page", http.StatusInternalServerError)
+		return
+	}
+	nonce := base64.StdEncoding.EncodeToString(nonceBytes)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'nonce-"+nonce+"'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store") // 页面内嵌 JS 随版本变化，禁缓存避免浏览器用旧页
 	page := strings.ReplaceAll(terminalPageHTML, "__SESSION_ID__", id)
+	page = strings.ReplaceAll(page, "__CSP_NONCE__", nonce)
 	page = strings.ReplaceAll(page, "__DEFAULT_FONT__", cfg.DefaultFont)
 	page = strings.ReplaceAll(page, "__DEFAULT_FSIZE__", fmt.Sprintf("%d", cfg.DefaultFontSize))
 	page = strings.ReplaceAll(page, "__DEFAULT_THEME__", cfg.DefaultTheme)

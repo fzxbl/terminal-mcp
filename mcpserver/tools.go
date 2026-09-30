@@ -26,19 +26,22 @@ type openInput struct {
 }
 
 type sendInput struct {
-	SessionID string `json:"session_id" jsonschema:"the session id returned by terminal_open"`
-	Input     string `json:"input" jsonschema:"the command line to type into the session (a trailing newline is added automatically)"`
-	WaitMs    int    `json:"wait_ms,omitempty" jsonschema:"max milliseconds to block waiting for the command to settle (default 30000, capped by server max_block_seconds)"`
+	SessionID  string `json:"session_id" jsonschema:"the session id returned by terminal_open"`
+	SessionKey string `json:"session_key" jsonschema:"the per-session capability returned by terminal_open; required for every operation on this session"`
+	Input      string `json:"input" jsonschema:"the command line to type into the session (a trailing newline is added automatically)"`
+	WaitMs     int    `json:"wait_ms,omitempty" jsonschema:"max milliseconds to block waiting for the command to settle (default 30000, capped by server max_block_seconds)"`
 }
 
 type outputInput struct {
-	SessionID string `json:"session_id" jsonschema:"the session id"`
-	WaitMs    int    `json:"wait_ms,omitempty" jsonschema:"max milliseconds to wait before returning (default 0)"`
-	Mode      string `json:"mode,omitempty" jsonschema:"\"tail\" (default: peek at the tail to judge if the command finished; does NOT advance the cursor) or \"since_last\" (deliver every new byte since the last since_last and advance the cursor)"`
+	SessionID  string `json:"session_id" jsonschema:"the session id"`
+	SessionKey string `json:"session_key" jsonschema:"the per-session capability returned by terminal_open"`
+	WaitMs     int    `json:"wait_ms,omitempty" jsonschema:"max milliseconds to wait before returning (default 0)"`
+	Mode       string `json:"mode,omitempty" jsonschema:"\"tail\" (default: peek at the tail to judge if the command finished; does NOT advance the cursor) or \"since_last\" (deliver every new byte since the last since_last and advance the cursor)"`
 }
 
 type exploreInput struct {
 	SessionID  string `json:"session_id" jsonschema:"the session id"`
+	SessionKey string `json:"session_key" jsonschema:"the per-session capability returned by terminal_open"`
 	OutputRef  string `json:"output_ref" jsonschema:"the opaque reference returned in a truncated result"`
 	Op         string `json:"op" jsonschema:"stat | read | grep"`
 	LineOffset int    `json:"line_offset,omitempty" jsonschema:"read/grep start logical line (0-based; read accepts negative to count from the end)"`
@@ -51,12 +54,14 @@ type exploreInput struct {
 }
 
 type controlInput struct {
-	SessionID string `json:"session_id" jsonschema:"the session id"`
-	Key       string `json:"key" jsonschema:"control key or recovery action. Control keys (written to the PTY as the corresponding control byte): ctrl-c (SIGINT, interrupt the running command), ctrl-d (EOF, end input / exit a REPL or shell), ctrl-z (SIGTSTP, suspend to background), ctrl-\\ (SIGQUIT, quit with core), ctrl-l (clear screen), ctrl-u (erase to line start), ctrl-k (erase to line end), ctrl-a (move to line start), ctrl-e (move to line end), ctrl-w (erase previous word), ctrl-r (reverse history search), ctrl-g (bell / cancel current edit or search), tab (completion), esc (Escape), enter (Enter), backspace. Recovery actions: flush (drop queued input + clear the current line + Enter), hard (reopen the shell), rearm (re-inject the sentinel prompt after you switched into a new shell, e.g. after su/docker exec/chroot, if the session appears stuck)."`
+	SessionID  string `json:"session_id" jsonschema:"the session id"`
+	SessionKey string `json:"session_key" jsonschema:"the per-session capability returned by terminal_open"`
+	Key        string `json:"key" jsonschema:"control key or recovery action. Control keys (written to the PTY as the corresponding control byte): ctrl-c (SIGINT, interrupt the running command), ctrl-d (EOF, end input / exit a REPL or shell), ctrl-z (SIGTSTP, suspend to background), ctrl-\\ (SIGQUIT, quit with core), ctrl-l (clear screen), ctrl-u (erase to line start), ctrl-k (erase to line end), ctrl-a (move to line start), ctrl-e (move to line end), ctrl-w (erase previous word), ctrl-r (reverse history search), ctrl-g (bell / cancel current edit or search), tab (completion), esc (Escape), enter (Enter), backspace. Recovery actions: flush (drop queued input + clear the current line + Enter), hard (reopen the shell), rearm (re-inject the sentinel prompt after you switched into a new shell, e.g. after su/docker exec/chroot, if the session appears stuck)."`
 }
 
 type sessionIDInput struct {
-	SessionID string `json:"session_id" jsonschema:"the session id"`
+	SessionID  string `json:"session_id" jsonschema:"the session id"`
+	SessionKey string `json:"session_key" jsonschema:"the per-session capability returned by terminal_open"`
 }
 
 type emptyInput struct{}
@@ -69,30 +74,30 @@ type listOutput struct {
 // 工具描述（英文）。涵盖 PTY 会话、local/ssh 模式、
 // 人工接管 held 语义、output 的 tail vs since_last 差异等关键指引。
 const (
-	descOpen = "Start a persistent real PTY session and return {session_id, state, terminal_url}. " +
+	descOpen = "Start a persistent real PTY session and return {session_id, session_key, state, terminal_url}. Retain session_key securely and pass it with session_id to every session operation; it is shown only once. " +
 		"mode=local spawns a shell (or the given command) on this host; mode=ssh opens 'ssh <host>' running bash (host is required). " +
 		"The session starts in state=loading; poll terminal_status until it becomes idle before interacting. " +
 		"terminal_url is a read-only web terminal a human can open to watch the session live, and optionally 'take over' to type commands manually. " +
 		"While a human has taken over, the session returns held=true and the model's send/close/control are blocked; use terminal_output(mode=since_last) to observe what the human is doing."
 
-	descSend = "Type a command into the session and block up to wait_ms (capped by max_block_seconds) for it to settle. " +
+	descSend = "Pass the session_key returned by terminal_open with session_id on every call. Type a command into the session and block up to wait_ms (capped by max_block_seconds) for it to settle. " +
 		"Returns this command's new output plus state (running/idle/dead), prompt and exit_code. " +
 		"state=running means the command has not finished yet (e.g. a large core still loading) - keep polling with terminal_output. " +
 		"If the output is too large the return is truncated: truncated=true and an output_ref is returned and this output already advanced the delivery cursor; use terminal_explore (op=stat/grep/read) to inspect it selectively; you can continue running commands afterwards. " +
 		"If held=true the session is under human takeover: this call was NOT executed, do not retry write operations; wait or do other work and watch with terminal_output(mode=since_last) until held clears."
 
-	descOutput = "Observe session output without relying on injected markers. Two modes, do not mix them to 'fetch everything':\n" +
+	descOutput = "Pass the session_key returned by terminal_open with session_id on every call. Observe session output without relying on injected markers. Two modes, do not mix them to 'fetch everything':\n" +
 		"mode=tail (default, 'a quick glance'): returns only the last ~tail_bytes of the current screen to judge whether the command finished (check state and prompt). It does NOT advance the since_last cursor and can be called repeatedly.\n" +
 		"mode=since_last ('fetch the complete increment'): returns every new byte since the previous since_last call, losing nothing, and advances the delivery cursor. If a single increment is too large the return is truncated (truncated=true + output_ref) and the cursor has already advanced past it; inspect it with terminal_explore.\n" +
 		"Correct way to fetch a full result: poll with tail until state=idle, then read with since_last.\n" +
 		"To see what a human did during takeover you MUST use mode=since_last: it reconstructs every command the human typed as \"[rc=n] $ command\" (with exit code) together with its output. held=true means a human is currently in control."
 
-	descExplore = "Read-only exploration of an oversized result referenced by output_ref (returned by terminal_send / terminal_output when a single output exceeds the size cap). " +
+	descExplore = "Pass the session_key returned by terminal_open with session_id on every call. Read-only exploration of an oversized result referenced by output_ref (returned by terminal_send / terminal_output when a single output exceeds the size cap). " +
 		"It inspects a fixed snapshot and does NOT advance the since_last cursor; the next since_last will NOT re-return this result. " +
 		"Do NOT read the whole result sequentially into context: first op=stat (size_bytes/line_count/max_line_bytes), then op=grep (pattern + before/after context) to locate, then op=read a local slice (line_offset 0-based, limit lines; a negative line_offset reads from the end; byte_offset continues a long-line read using the byte_offset from the previous read). " +
 		"Errors are usually at the end - use op=read with a negative line_offset. pattern is a Go regular expression; max_bytes is clamped to the server cap."
 
-	descControl = "Send a control key to the session, or perform a recovery action. " +
+	descControl = "Pass the session_key returned by terminal_open with session_id on every call. Send a control key to the session, or perform a recovery action. " +
 		"Control keys are written to the PTY as raw control bytes and work even while a command is running: " +
 		"ctrl-c (SIGINT, interrupt), ctrl-d (EOF), ctrl-z (suspend), ctrl-\\ (SIGQUIT), ctrl-l (clear screen), " +
 		"ctrl-u / ctrl-k (erase to line start/end), ctrl-a / ctrl-e (move to line start/end), ctrl-w (erase word), " +
@@ -101,11 +106,11 @@ const (
 		"rearm (re-inject the sentinel prompt after you switched into a new shell, e.g. after su/docker exec/chroot, if the session appears stuck). " +
 		"If held=true the session is under human takeover: this call was NOT executed; wait until held clears."
 
-	descStatus = "Lightweight status query (empty output). Returns state, prompt, exit_code and held. " +
+	descStatus = "Pass the session_key returned by terminal_open with session_id on every call. Lightweight status query (empty output). Returns state, prompt, exit_code and held. " +
 		"held=true means a human has taken over: the model should pause write operations and only read until held becomes false; " +
 		"use terminal_output(mode=since_last) to see what the human executed."
 
-	descClose = "Close the session, releasing its child process and concurrency slot. " +
+	descClose = "Pass the session_key returned by terminal_open with session_id on every call. Close the session, releasing its child process and concurrency slot. " +
 		"If held=true the session is under human takeover: this call was NOT executed; wait until held clears."
 
 	descList = "List all sessions on this instance with their status snapshot (session_id, host, status, idle_seconds, held). " +
@@ -185,7 +190,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_send", Description: resolveDesc("terminal_send")},
 		func(_ context.Context, req *mcp.CallToolRequest, in sendInput) (*mcp.CallToolResult, session.Envelope, error) {
 			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID) {
+			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_send", map[string]any{"session_id": in.SessionID}, env)
 				return nil, env, nil
@@ -200,7 +205,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_output", Description: resolveDesc("terminal_output")},
 		func(_ context.Context, req *mcp.CallToolRequest, in outputInput) (*mcp.CallToolResult, session.Envelope, error) {
 			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID) {
+			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_output", map[string]any{"session_id": in.SessionID, "wait_ms": in.WaitMs, "mode": in.Mode}, env)
 				return nil, env, nil
@@ -215,7 +220,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_explore", Description: resolveDesc("terminal_explore")},
 		func(_ context.Context, req *mcp.CallToolRequest, in exploreInput) (*mcp.CallToolResult, session.Envelope, error) {
 			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID) {
+			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_explore", map[string]any{"session_id": in.SessionID, "op": in.Op, "output_ref": in.OutputRef}, env)
 				return nil, env, nil
@@ -234,7 +239,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_control", Description: resolveDesc("terminal_control")},
 		func(_ context.Context, req *mcp.CallToolRequest, in controlInput) (*mcp.CallToolResult, session.Envelope, error) {
 			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID) {
+			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_control", map[string]any{"session_id": in.SessionID, "key": in.Key}, env)
 				return nil, env, nil
@@ -249,7 +254,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_status", Description: resolveDesc("terminal_status")},
 		func(_ context.Context, req *mcp.CallToolRequest, in sessionIDInput) (*mcp.CallToolResult, session.Envelope, error) {
 			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID) {
+			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_status", map[string]any{"session_id": in.SessionID}, env)
 				return nil, env, nil
@@ -267,7 +272,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 				logEnv(a, req, "terminal_close", map[string]any{"session_id": in.SessionID}, env)
 				return nil, env, nil
 			}
-			if !authorizeOwner(owner, in.SessionID) {
+			if !authorizeOwner(owner, in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead"}
 				logEnv(a, req, "terminal_close", map[string]any{"session_id": in.SessionID}, env)
 				return nil, env, nil
@@ -319,12 +324,8 @@ func ownerSig(req *mcp.CallToolRequest) (string, bool) {
 }
 
 // authorizeOwner 校验签名 owner 是否为会话 id 的属主。false → 越权或本机无此会话，按 not found 处理。
-func authorizeOwner(owner, id string) bool {
-	got, found := session.Owner(id)
-	if !found {
-		return false
-	}
-	return got == owner
+func authorizeOwner(owner, id, capability string) bool {
+	return session.Authorize(id, owner, capability)
 }
 
 // baseEntry 构造带 CallerIP 与调用方标识（X-MCP-USER）的审计条目骨架。
@@ -334,8 +335,21 @@ func baseEntry(req *mcp.CallToolRequest, tool string, params map[string]any) aud
 		CallerIP: callerIP(h),
 		User:     mcpUser(h),
 		Tool:     tool,
-		Params:   params,
+		Params:   stripAuditCapabilities(params),
 	}
+}
+
+func stripAuditCapabilities(params map[string]any) map[string]any {
+	if params == nil {
+		return nil
+	}
+	clean := make(map[string]any, len(params))
+	for key, value := range params {
+		if key != "session_key" && key != "capability" && key != "capability_hash" {
+			clean[key] = value
+		}
+	}
+	return clean
 }
 
 // mcpUser 从 X-MCP-USER 头解析每次调用的调用方标识（无则空）。

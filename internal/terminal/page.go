@@ -4,20 +4,16 @@ package terminal
 // 用 xterm.js（真正的终端模拟器）渲染 SSE 推来的原始字节流：光标、行编辑（退格）、颜色、
 // 光标定位、备用屏（vim/top/less）都能正确处理。人点「人工接管」后进入可输入态，
 // xterm 的 onData 把按键字节经 WebSocket 送回 PTY，并同步窗口尺寸；退出接管即恢复只读。
-// xterm 资源走 CDN（内网可达）；模型侧 ssh_read 的清洗是后端逻辑，与本页渲染无关。
+// xterm 与 addon 资源由本服务从内嵌的固定版本文件提供；模型侧 ssh_read 的清洗是后端逻辑，与本页渲染无关。
 const terminalPageHTML = `<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>terminal-mcp terminal __SESSION_ID__</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fira-code@5/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/hack@5/index.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/source-code-pro@5/index.css">
-<style>
+<base href="./">
+<link rel="stylesheet" href="assets/xterm-6.0.0.css">
+<style nonce="__CSP_NONCE__">
   :root{
     --bg:#1e1e2e; --bar:#181825; --termbg:#1e1e2e; --border:#313244;
     --text:#cdd6f4; --muted:#7f849c; --accent:#89b4fa; --glow:rgba(137,180,250,0.16);
@@ -166,12 +162,13 @@ const terminalPageHTML = `<!DOCTYPE html>
   </button>
 </div>
 <div id="term"><div id="termbody"></div></div>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/lib/xterm.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/lib/addon-fit.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.19.0/lib/addon-webgl.js"></script>
-<script>
+<script nonce="__CSP_NONCE__" src="assets/xterm-6.0.0.js"></script>
+<script nonce="__CSP_NONCE__" src="assets/addon-fit-0.11.0.js"></script>
+<script nonce="__CSP_NONCE__" src="assets/addon-webgl-0.19.0.js"></script>
+<script nonce="__CSP_NONCE__">
 (function(){
   var id = "__SESSION_ID__";
+  var sessionKey = new URLSearchParams(location.hash.slice(1)).get("key") || "";
   // 本页地址即 .../terminal/<id>，子资源（stream/takeover/ws）在其下。
   // 基于 location.pathname 推导，与挂载前缀（/terminal 或外围加的 /view 等）解耦。
   var base = location.pathname.replace(/\/+$/, "");
@@ -367,7 +364,7 @@ const terminalPageHTML = `<!DOCTYPE html>
   }
   function setTakeover(on){
     fetch(base+"/takeover",
-      {method:"POST", headers:{"Content-Type":"application/json"},
+      {method:"POST", headers:{"Content-Type":"application/json", "X-Terminal-Capability":sessionKey},
        body:JSON.stringify({on:on, owner:owner, cols:term.cols, rows:term.rows})})
      .then(function(r){ return r.json(); })
      .then(function(j){ applyState(!!j.held, !!j.mine); }) // 200/409 均回传 {held,mine}
@@ -398,7 +395,7 @@ const terminalPageHTML = `<!DOCTYPE html>
   function openWS(){
     if(ws) return;
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(proto+"//"+location.host+base+"/ws?owner="+encodeURIComponent(owner));
+    ws = new WebSocket(proto+"//"+location.host+base+"/ws?owner="+encodeURIComponent(owner), ["terminal-capability."+sessionKey]);
     ws.onopen = function(){ sendResize(); };
     ws.onclose = function(){ ws = null; };
   }
@@ -412,7 +409,7 @@ const terminalPageHTML = `<!DOCTYPE html>
   // 接管是服务端会话级状态，非本窗口私有：加载时同步一次，并轮询保持三态 UI 与他人接管态实时一致。
   function syncTakeover(){
     if(finished) return;
-    fetch(base+"/takeover?owner="+encodeURIComponent(owner))
+    fetch(base+"/takeover?owner="+encodeURIComponent(owner), {headers:{"X-Terminal-Capability":sessionKey}})
      .then(function(r){ return r.json(); })
      .then(function(j){ if(!finished) applyState(!!j.held, !!j.mine); })
      .catch(function(){});
@@ -421,10 +418,31 @@ const terminalPageHTML = `<!DOCTYPE html>
   setInterval(syncTakeover, 2500);
 
   // ---- 输出：SSE 原始字节直接喂给 xterm ----
-  var es = new EventSource(base + "/stream");
-  es.addEventListener("data", function(e){ term.write(b64ToBytes(e.data)); });
-  es.addEventListener("state", function(e){ setState(e.data); });
-  es.onerror = function(){ if(!finished) setState("reconnecting"); };
+  async function streamTerminal(){
+    while(!finished){
+      try{
+        var res = await fetch(base+"/stream", {headers:{"X-Terminal-Capability":sessionKey}});
+        if(!res.ok || !res.body) throw new Error("stream unavailable");
+        var reader = res.body.getReader(), decoder = new TextDecoder(), pending = "";
+        while(!finished){
+          var part = await reader.read(); if(part.done) break;
+          pending += decoder.decode(part.value, {stream:true});
+          var events = pending.split("\n\n"); pending = events.pop();
+          events.forEach(function(block){
+            var event = "message", data = "";
+            block.split("\n").forEach(function(line){
+              if(line.indexOf("event:") === 0) event = line.slice(6).trim();
+              else if(line.indexOf("data:") === 0) data += line.slice(5).trim();
+            });
+            if(event === "data") term.write(b64ToBytes(data));
+            else if(event === "state") setState(data);
+          });
+        }
+      }catch(e){ if(!finished) setState("reconnecting"); }
+      if(!finished) await new Promise(function(resolve){ setTimeout(resolve, 1500); });
+    }
+  }
+  streamTerminal();
 })();
 </script>
 </body>

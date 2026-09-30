@@ -1,6 +1,8 @@
 package session
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"strings"
@@ -81,8 +83,11 @@ func promptLineStart(proc *pty.ProcSession) int64 {
 }
 
 // startSession 起子进程并异步跑哨兵 PS1 初始化，就绪后置 ready。
-func startSession(id, host, mode, name string, args []string) (*Session, error) {
-	sess := &Session{ID: id, Host: host, Mode: mode, Status: "loading"}
+func startSession(id, host, mode, name string, args []string, owner, capability string) (*Session, error) {
+	sess := &Session{ID: id, Owner: owner, Host: host, Mode: mode, Status: "loading"}
+	if capability != "" {
+		sess.setCapability(capability)
+	}
 	if !theStore.add(sess) {
 		return nil, fmt.Errorf("已达并发上限 %d", config.Get().MaxSessions)
 	}
@@ -605,7 +610,6 @@ func Close(id string) Envelope {
 		proc.Close()
 	}
 	sess.setStatus("closed", "")
-	theStore.remove(id)
 	return Envelope{State: "dead"}
 }
 
@@ -633,19 +637,30 @@ func finalizeScope(output string, from, to int64, state, prompt string, code *in
 
 // OpenLocalForTest 本地 bash 会话（测试用）。
 func OpenLocalForTest() (string, error) {
+	id, _, err := OpenLocalForTestWithCapability()
+	return id, err
+}
+
+// OpenLocalForTestWithCapability exposes the generated test-session key to package tests.
+func OpenLocalForTestWithCapability() (string, string, error) {
 	config.Load("")
 	if theStore == nil {
 		InitStore(config.Get().MaxSessions)
 	}
 	id := newSessionID()
+	keyBytes := make([]byte, 32)
+	if _, err := rand.Read(keyBytes); err != nil {
+		return "", "", err
+	}
+	key := base64.RawURLEncoding.EncodeToString(keyBytes)
 	name, args := BuildStartArgs("local", "")
-	_, err := startSessionTracked(id, "local", "local", name, args)
-	return id, err
+	_, err := startSessionTracked(id, "local", "local", name, args, "", key)
+	return id, key, err
 }
 
 // startSessionTracked 记录 reopen 参数供 hard reset 用，再调 startSession。
-func startSessionTracked(id, host, mode, name string, args []string) (*Session, error) {
-	sess, err := startSession(id, host, mode, name, args)
+func startSessionTracked(id, host, mode, name string, args []string, owner, capability string) (*Session, error) {
+	sess, err := startSession(id, host, mode, name, args, owner, capability)
 	if err == nil {
 		sess.reopenName, sess.reopenArgs = name, args
 	}

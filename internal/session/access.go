@@ -16,6 +16,15 @@ func Lookup(id string) *Session {
 	return theStore.get(id)
 }
 
+// LookupWithCapability atomically finds a session and verifies its bearer capability.
+// The returned pointer remains safe to inspect if idle GC removes the store entry afterward.
+func LookupWithCapability(id, capability string) *Session {
+	if theStore == nil || capability == "" {
+		return nil
+	}
+	return theStore.getWithCapability(id, capability)
+}
+
 // ReadTranscript 读取会话历史全量（供网页终端在会话关闭/断开后回看）。
 // 内部按当前配置的 TranscriptDir 定位落盘文件；不存在或 id 非法返回 ok=false。
 func ReadTranscript(id string) ([]byte, bool) {
