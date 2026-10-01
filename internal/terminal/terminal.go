@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -230,8 +231,22 @@ func serveTerminalInput(w http.ResponseWriter, req *http.Request, id string) {
 		http.Error(w, "session held by another operator", http.StatusConflict)
 		return
 	}
-	conn, err := wsUpgrader.Upgrade(w, req, nil)
+	// 回显浏览器提供的能力 subprotocol：浏览器在「提供了 subprotocol 却没被服务端回选」时会直接
+	// Fail 握手（Chrome 报 "Sent non-empty 'Sec-WebSocket-Protocol' header but no response was
+	// received"），而 Go 客户端对缺省回显是容忍的——所以此前只在网页端复现、单测/Go 拨号都抓不到。
+	// 必须把它原样回选，否则人工接管连不上写通道、无法输入。
+	var respHeader http.Header
+	if proto := capabilitySubprotocol(req); proto != "" {
+		respHeader = http.Header{"Sec-Websocket-Protocol": {proto}}
+	}
+	conn, err := wsUpgrader.Upgrade(w, req, respHeader)
 	if err != nil {
+		// 诊断：此前这里静默 return，接管输入升级失败时服务端无任何痕迹，排障困难。
+		// 记一行足够定位失败层：是否实现 http.Hijacker（中间件包裹 ResponseWriter 常把它丢掉，
+		// 表现为 SSE 可用但 WS 升级不了）、Origin/Host（同源校验）与底层错误。
+		_, hijackable := w.(http.Hijacker)
+		log.Printf("[terminal] ws upgrade failed id=%s hijackable=%v origin=%q host=%q err=%v",
+			id, hijackable, req.Header.Get("Origin"), req.Host, err)
 		return
 	}
 	defer conn.Close()
@@ -266,9 +281,19 @@ func serveTerminalInput(w http.ResponseWriter, req *http.Request, id string) {
 // websocketCapability reads the bearer key from a WebSocket subprotocol offered by
 // the browser. This keeps it out of the URL while satisfying the browser WebSocket API.
 func websocketCapability(req *http.Request) string {
+	if p := capabilitySubprotocol(req); p != "" {
+		return strings.TrimPrefix(p, "terminal-capability.")
+	}
+	return ""
+}
+
+// capabilitySubprotocol returns the full "terminal-capability.<key>" subprotocol the
+// browser offered (empty if none). The server must echo it back on upgrade, or browsers
+// fail the handshake ("Sent non-empty 'Sec-WebSocket-Protocol' header but no response").
+func capabilitySubprotocol(req *http.Request) string {
 	for _, protocol := range websocket.Subprotocols(req) {
-		if key, ok := strings.CutPrefix(protocol, "terminal-capability."); ok {
-			return key
+		if strings.HasPrefix(protocol, "terminal-capability.") {
+			return protocol
 		}
 	}
 	return ""

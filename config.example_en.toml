@@ -1,0 +1,122 @@
+# This file is the example config for the "standalone process" deployment (cmd/terminal-mcp).
+# Loading: `./terminal-mcp --config /path/to/config.toml`; if --config is omitted, the process
+# auto-discovers and loads config.toml from the current working directory. An explicitly given path
+# that is missing or fails to parse aborts with an error (no more silent fallback to defaults).
+# The "embedded" deployment (loaded by a host via mcpserver.Init, e.g. stability-lib's
+# conf*/mcp/terminal-mcp.toml) has the host inject some runtime params; fields marked
+# "[embedded: not needed]" below are overridden by the host and have no effect when embedded.
+
+# ===================== Service / process =====================
+# listen_addr: HTTP listen address of the standalone process. [embedded: not needed] when embedded,
+# the host injects the outward address and mount prefix via SetSelfAddr / SetPublicBaseURL / MountWebTerminal.
+listen_addr = "127.0.0.1:8900"
+data_dir = "./data"
+max_sessions = 2
+idle_ttl_minutes = 30
+max_block_seconds = 30
+transcript_retention_days = 7
+
+# ===================== Logging & audit =====================
+# Logging: both the audit log and the service runtime log go under log_dir, rotated by
+# time (not size), with filenames like audit.20260723.log.
+# An absolute path is recommended so logs don't land in the startup working directory.
+# log_dir = "log"                 # default "log" (relative to the startup dir; prefer an absolute path)
+# log_rotate = "daily"             # rotation period: daily | hourly
+# log_max_age_days = 30            # retention for old logs (days); <=0 means keep forever
+# audit_log only customizes the audit log filename prefix (its basename minus .log); empty means "audit".
+# [embedded: not needed] when embedded, auditing is handled by the host's unified audit plugin; this field has no effect.
+audit_log = ""
+
+# ===================== SSH connection =====================
+# ssh_user: required for ssh mode (no default).
+ssh_user = ""
+# ssh_opts: SSH host-key policy defaults to accept-new (TOFU): the first connection is recorded
+# into the normal known_hosts, and later key changes are rejected.
+# High-assurance environments should pre-provision trusted host keys and switch to StrictHostKeyChecking=yes.
+ssh_opts = "-tt -o LogLevel=error -o StrictHostKeyChecking=accept-new -o ConnectTimeout=4"
+# ssh_login_prologue (default empty): one command run in the local shell before ssh, typically for
+# auth login (when credentials must share the ssh session). Chain multiple with &&; the whole thing is
+# still wrapped in `sh -c '{...} && exec ssh'`, so on success exec replaces the process (no lingering local
+# shell) and on failure it short-circuits — neither escapes to a local shell. Leave empty for passwordless /
+# public-key / no-auth setups (ssh connects directly). Fill it per your own auth method.
+# ssh_login_prologue = "<your-auth-login-command>"
+
+# ===================== Shell / command-boundary behavior =====================
+# default_shell: the local shell spawned when opening a mode=local session (ssh mode uses the remote
+# default shell and is unaffected by this).
+default_shell = "bash"
+# Shell-switch command registry: when one of these commands runs and the sentinel is lost
+# afterwards, the server re-arms the sentinel automatically to restore command-boundary detection.
+# Plain text, appendable (add your own container-enter / shell-switch commands here). Empty uses the defaults below.
+shell_switch_commands = ["ssh", "su", "sudo -i", "sudo su", "docker exec", "kubectl exec", "nsenter", "chroot"]
+# Whether to auto re-arm the sentinel; default true. Set false to fully disable auto re-arm,
+# keeping only the manual terminal_control(key="rearm").
+auto_rearm = true
+
+# ===================== Security hardening =====================
+# The following two are optional hardening, disabled/empty by default; most users need neither.
+# disable_local_mode (default false): when true, forbid mode=local and allow only ssh,
+# so the MCP host's local shell is never exposed.
+disable_local_mode = false
+# resource_limit_cmd (default empty): one resource-limit command (usually ulimit) injected "transparently"
+# to the model right after the session starts. It is written at the very top of the init script together with
+# the sentinel, and re-injected on every re-arm when switching into a new shell layer and on hard reset, so:
+#   - it applies to the session root shell at startup and is inherited by all child processes; without -S/-H,
+#     ulimit sets both soft and hard limits, and once a hard limit is set a non-privileged process cannot raise
+#     it again, so a local subshell / ordinary command cannot escape the cap no matter how it calls ulimit;
+#   - after switching into ssh remote / su / docker exec / chroot etc., re-arm re-injects it in the new context.
+# Boundaries: ulimit cannot constrain "raising one's own hard limit after escalating to root", nor "a process
+# tree started by a daemon that does not inherit this session". For a privilege-independent hard cap on the host
+# process tree, use cgroup v2 instead. Chain multiple limits with ;.
+# resource_limit_cmd = "ulimit -v 4194304; ulimit -t 600; ulimit -u 4096"
+
+# ===================== Output size / explore limits =====================
+# max_buffer_bytes (default 8 MiB): in-memory tail-cache cap for session output. The single source of truth for
+# output is the on-disk transcript (<transcript_dir>/<id>.raw); memory keeps only the most recent bytes, and
+# earlier content is read back from the .raw on demand without loss. Prevents a `cat` of a huge file / `yes`
+# style streaming output from blowing up process memory.
+# max_buffer_bytes = 8388608
+
+# exec_output_max_bytes (default 1 MiB): cap on what a single terminal_send/terminal_output returns to the model.
+# Beyond it, only a head preview plus an output_ref (signed token) is returned; explore with
+# terminal_explore(output_ref, op=stat|grep|read).
+# exec_output_max_bytes = 1048576
+
+# explore server-side hard caps: a larger caller-supplied value is clamped and cannot enlarge a single MCP response.
+# explore_max_bytes_hard = 131072   # hard cap on explore body bytes per response, default 128 KiB
+# explore_read_limit_hard = 1000    # max lines for read
+# explore_grep_limit_hard = 500     # max matches for grep
+# explore_ctx_hard = 20             # per-side cap for grep before/after
+
+# explore soft defaults: used when the caller does not specify (<=0); clamped to not exceed the matching hard cap.
+# explore_max_bytes_default = 32768  # default explore body bytes, default 32 KiB
+# explore_read_limit_default = 100   # default lines for read
+# explore_grep_limit_default = 50    # default matches for grep
+
+# ===================== Distributed deployment =====================
+# Distributed deployment: the sibling-node cluster this process belongs to.
+# terminal_list fans out to these nodes to aggregate sessions (reverse-proxy routing does NOT need this — the
+# owner address is encoded in the session_id). Leave empty for single-node. In a cluster all nodes can share one
+# config: set listen_addr to "0.0.0.0:<port>" and the process auto-detects its own reachable IP as the owner
+# address (no per-instance address needed); override via the embedding API SetSelfAddr when behind NAT / needing
+# an externally mapped address. The human-facing terminal_url is set separately via SetPublicBaseURL (a domain /
+# VIP is fine, independent of the owner address). peers can also be discovered dynamically via SetPeerProvider,
+# making the setup fully config-free.
+# [embedded: not needed] when embedded, the host overrides this static peers list via SetPeerProvider (BNS-based discovery).
+# peers = ["10.0.0.2:8900", "10.0.0.3:8900"]
+
+# ===================== Session authorization (notes) =====================
+# Session authorization: terminal_open issues a one-time session_key (capability) for each session;
+# every subsequent operation on that session (send/output/control/close and the web stream/takeover/ws routes)
+# must present it. This is the sole authorization credential; X-MCP-USER is only recorded as the session owner
+# at open time (read-only, viewable via terminal_list) and used for auditing — it does not participate in auth.
+
+# ===================== Tool-description overrides =====================
+# Tool-description overrides: rewrite, per tool name, the MCP tool descriptions exposed to the model
+# (useful when embedding into an external MCP and rewording in your own voice).
+# Missing or empty entries keep the built-in default description. key is one of:
+#   terminal_open / terminal_send / terminal_output / terminal_control /
+#   terminal_status / terminal_close / terminal_list / terminal_explore
+# [tool_descriptions]
+# terminal_open = "Open a persistent terminal session and return its session_id and read-only web terminal URL."
+# terminal_send = "Type one command into the session and wait for it to finish; return new output and state."

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 
@@ -8,61 +9,47 @@ import (
 )
 
 type Config struct {
-	DataDir                 string `toml:"data_dir"`
+	// ── 服务 / 进程 ──
 	ListenAddr              string `toml:"listen_addr"`
-	SSHUser                 string `toml:"ssh_user"`
-	DefaultShell            string `toml:"default_shell"`
+	DataDir                 string `toml:"data_dir"`
 	MaxSessions             int    `toml:"max_sessions"`
 	IdleTTLMinutes          int    `toml:"idle_ttl_minutes"`
-	ExecOutputMaxBytes      int64  `toml:"exec_output_max_bytes"`
-	MaxBufferBytes          int    `toml:"max_buffer_bytes"`
-	OpenReadyTimeoutMinutes int    `toml:"open_ready_timeout_minutes"`
-	SSHOpts                 string `toml:"ssh_opts"`
 	MaxBlockSeconds         int    `toml:"max_block_seconds"`
+	OpenReadyTimeoutMinutes int    `toml:"open_ready_timeout_minutes"`
 	QuietWindowMs           int    `toml:"quiet_window_ms"`
 	TailBytes               int    `toml:"tail_bytes"`
+	TranscriptDir           string `toml:"transcript_dir"`
+	TranscriptRetentionDays int    `toml:"transcript_retention_days"`
 
-	// terminal_explore 服务端硬上限：调用方传入更大值会被 clamp，不能扩大单次 MCP 返回体积。
-	ExploreMaxBytesHard  int64 `toml:"explore_max_bytes_hard"`  // explore 正文单次返回硬上限，默认 128 KiB
-	ExploreReadLimitHard int   `toml:"explore_read_limit_hard"` // read 行数上限，默认 1000
-	ExploreGrepLimitHard int   `toml:"explore_grep_limit_hard"` // grep 匹配数上限，默认 500
-	ExploreCtxHard       int   `toml:"explore_ctx_hard"`        // grep before/after 各自上限，默认 20
-
-	// explore 软默认值：调用方未显式给（<=0）时采用；与硬上限相互独立，且会被 clamp 到不超过对应硬上限。
-	ExploreMaxBytesDefault  int64    `toml:"explore_max_bytes_default"`  // explore 正文默认返回字节，默认 32 KiB
-	ExploreReadLimitDefault int      `toml:"explore_read_limit_default"` // read 默认行数，默认 100
-	ExploreGrepLimitDefault int      `toml:"explore_grep_limit_default"` // grep 默认匹配数，默认 50
-	InitCommands            []string `toml:"init_commands"`
-	DefaultFont             string   `toml:"default_font"`
-	DefaultFontSize         int      `toml:"default_font_size"`
-	DefaultTheme            string   `toml:"default_theme"`
-	DefaultRenderer         string   `toml:"default_renderer"`
-	TranscriptDir           string   `toml:"transcript_dir"`
-	TranscriptRetentionDays int      `toml:"transcript_retention_days"`
-	AuditLog                string   `toml:"audit_log"`
-
-	// 日志目录与切割/保存策略（审计日志与服务运行日志都落到 LogDir 下）。
+	// ── 日志与审计 ──
 	LogDir        string `toml:"log_dir"`          // 默认 <data_dir>/logs
 	LogRotate     string `toml:"log_rotate"`       // 切割周期：hourly | daily，默认 daily（按时间切割，不按大小）
 	LogMaxAgeDays int    `toml:"log_max_age_days"` // 旧日志保存周期（天），默认 30；<=0 表示永久保留
+	AuditLog      string `toml:"audit_log"`
 
-	// ShellSwitchCommands 是"会切进新一层 shell"的命令注册表（明文、可追加）。命中且哨兵丢失时触发自动布哨。
-	ShellSwitchCommands []string `toml:"shell_switch_commands"`
-	// AutoRearm 控制是否在命中切换命令后自动重新布哨。默认 true；置 false 仅保留手动 terminal_control(rearm)。
-	// bool 默认真的实现见 Load：DecodeFile 前先置 true，缺省保持 true，显式 auto_rearm=false 可覆盖。
-	AutoRearm bool `toml:"auto_rearm"`
-
-	// ToolDescriptions 允许按工具名覆盖 MCP 工具的对外描述（key 为工具名，如 terminal_open/terminal_send/
-	// terminal_output/terminal_control/terminal_status/terminal_close/terminal_list）。
-	// 缺省或空串的条目沿用内置默认描述；集成到外部 MCP、需要按自家话术改写工具说明时用它。
-	ToolDescriptions map[string]string `toml:"tool_descriptions"`
-
+	// ── SSH 连接 ──
+	SSHUser string `toml:"ssh_user"`
+	SSHOpts string `toml:"ssh_opts"`
 	// SSHLoginPrologue 可选，默认留空。它是 ssh 前在本地 shell 执行的一条命令，常用于鉴权登录
 	// （凭证需与 ssh 同会话时）。需要多条命令用 && 连接即可——整体被包在
 	// `sh -c '{ <prologue>; } && exec ssh ...'` 里，成功后 exec 顶替进程、不残留本地交互 shell，
 	// 前置失败则短路退出结束会话，均不会逃逸到本地 shell。留空则 ssh 直连。
 	SSHLoginPrologue string `toml:"ssh_login_prologue"`
 
+	// ── Shell / 命令边界行为 ──
+	DefaultShell string   `toml:"default_shell"`
+	InitCommands []string `toml:"init_commands"`
+	// ShellSwitchCommands 是"会切进新一层 shell"的命令注册表（明文、可追加）。命中且哨兵丢失时触发自动布哨。
+	ShellSwitchCommands []string `toml:"shell_switch_commands"`
+	// AutoRearm 控制是否在命中切换命令后自动重新布哨。默认 true；置 false 仅保留手动 terminal_control(rearm)。
+	// bool 默认真的实现见 Load：DecodeFile 前先置 true，缺省保持 true，显式 auto_rearm=false 可覆盖。
+	AutoRearm bool `toml:"auto_rearm"`
+
+	// ── 安全加固 ──
+	// DisableLocalMode 是「可选」加固，默认 false。为 true 时禁止 mode=local 开会话（terminal_open 直接
+	// 返回错误）。仅在集成到外部 MCP、不希望暴露 MCP 宿主机本地 shell 时按需开启；可与 ssh_login_prologue
+	// 搭配，仅允许 ssh 会话直达远端。
+	DisableLocalMode bool `toml:"disable_local_mode"`
 	// ResourceLimitCmd 可选，默认留空。它是会话启动后对模型「透明」注入的一条资源限制命令，
 	// 通常是 ulimit（如 "ulimit -v 4194304; ulimit -t 600; ulimit -u 4096"）。
 	// 它随哨兵一起写在初始化脚本最前面，且在每次「切进新一层 shell」的自动/手动重新布哨（rearm）、
@@ -77,14 +64,35 @@ type Config struct {
 	// 注入内容与哨兵同属布哨噪声，被 since_last 游标跳过，模型侧 terminal_output 看不到。
 	ResourceLimitCmd string `toml:"resource_limit_cmd"`
 
-	// DisableLocalMode 是「可选」加固，默认 false。为 true 时禁止 mode=local 开会话（terminal_open 直接
-	// 返回错误）。仅在集成到外部 MCP、不希望暴露 MCP 宿主机本地 shell 时按需开启；可与 ssh_login_prologue
-	// 搭配，仅允许 ssh 会话直达远端。
-	DisableLocalMode bool `toml:"disable_local_mode"`
+	// ── 输出大小 / explore 限制 ──
+	MaxBufferBytes     int   `toml:"max_buffer_bytes"`
+	ExecOutputMaxBytes int64 `toml:"exec_output_max_bytes"`
+	// terminal_explore 服务端硬上限：调用方传入更大值会被 clamp，不能扩大单次 MCP 返回体积。
+	ExploreMaxBytesHard  int64 `toml:"explore_max_bytes_hard"`  // explore 正文单次返回硬上限，默认 128 KiB
+	ExploreReadLimitHard int   `toml:"explore_read_limit_hard"` // read 行数上限，默认 1000
+	ExploreGrepLimitHard int   `toml:"explore_grep_limit_hard"` // grep 匹配数上限，默认 500
+	ExploreCtxHard       int   `toml:"explore_ctx_hard"`        // grep before/after 各自上限，默认 20
+	// explore 软默认值：调用方未显式给（<=0）时采用；与硬上限相互独立，且会被 clamp 到不超过对应硬上限。
+	ExploreMaxBytesDefault  int64 `toml:"explore_max_bytes_default"`  // explore 正文默认返回字节，默认 32 KiB
+	ExploreReadLimitDefault int   `toml:"explore_read_limit_default"` // read 默认行数，默认 100
+	ExploreGrepLimitDefault int   `toml:"explore_grep_limit_default"` // grep 默认匹配数，默认 50
 
+	// ── 网页终端外观 ──
+	DefaultFont     string `toml:"default_font"`
+	DefaultFontSize int    `toml:"default_font_size"`
+	DefaultTheme    string `toml:"default_theme"`
+	DefaultRenderer string `toml:"default_renderer"`
+
+	// ── 分布式 ──
 	// Peers 是兄弟节点对外可达地址列表（host:port），仅用于 terminal_list 跨节点聚合（fan-out）。
 	// 反代路由不需要它——属主地址已编码在 session_id 内。单机部署留空即可。
 	Peers []string `toml:"peers"`
+
+	// ── 工具描述覆盖 ──
+	// ToolDescriptions 允许按工具名覆盖 MCP 工具的对外描述（key 为工具名，如 terminal_open/terminal_send/
+	// terminal_output/terminal_control/terminal_status/terminal_close/terminal_list）。
+	// 缺省或空串的条目沿用内置默认描述；集成到外部 MCP、需要按自家话术改写工具说明时用它。
+	ToolDescriptions map[string]string `toml:"tool_descriptions"`
 }
 
 func (c *Config) applyDefaults() {
@@ -199,14 +207,18 @@ var (
 	cfgOnce sync.Once
 )
 
-// Load 从指定路径解析配置（缺失用默认值，不 panic），幂等。
+// Load 从指定路径解析配置（path 为空表示不读文件、全用默认值），幂等。
+// 显式给了 path 却解析失败（文件不存在 / TOML 语法错误等）会直接 panic，
+// 避免「配错了却静默回退默认值」把问题藏到运行期。
 func Load(path string) *Config {
 	cfgOnce.Do(func() {
 		// AutoRearm 默认 true：先置 true 再 DecodeFile，缺省 key 保持 true，
 		// 显式 auto_rearm=false 会被 DecodeFile 覆盖成 false。
 		cfg.AutoRearm = true
 		if path != "" {
-			_, _ = toml.DecodeFile(path, &cfg)
+			if _, err := toml.DecodeFile(path, &cfg); err != nil {
+				panic(fmt.Errorf("load config %q: %w", path, err))
+			}
 		}
 		cfg.applyDefaults()
 	})

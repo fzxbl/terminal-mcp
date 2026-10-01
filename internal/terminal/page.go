@@ -125,13 +125,17 @@ const terminalPageHTML = `<!DOCTYPE html>
   <span class="chip"><span id="dot"></span><span id="state">…</span></span>
   <span class="sid" title="__SESSION_ID__">
     <span class="val">__SESSION_ID__</span>
-    <button class="iconbtn" id="copyid" title="复制会话 ID" aria-label="复制会话 ID">
+    <button class="iconbtn" id="copyid" data-i18n-title="copy_id" data-i18n-aria="copy_id">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/></svg>
     </button>
   </span>
   <span class="spacer"></span>
-  <span class="held-chip"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>人工操作中</span>
-  <select id="themesel" class="chip" title="配色主题" aria-label="配色主题">
+  <span class="held-chip"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg><span data-i18n="held"></span></span>
+  <select id="langsel" class="chip" data-i18n-title="lang_label" data-i18n-aria="lang_label">
+    <option value="zh">中文</option>
+    <option value="en">English</option>
+  </select>
+  <select id="themesel" class="chip" data-i18n-title="theme" data-i18n-aria="theme">
     <option value="catppuccin-mocha">Catppuccin Mocha</option>
     <option value="tokyo-night">Tokyo Night</option>
     <option value="one-dark">One Dark</option>
@@ -140,7 +144,7 @@ const terminalPageHTML = `<!DOCTYPE html>
     <option value="nord">Nord</option>
     <option value="ayu-mirage">Ayu Mirage</option>
   </select>
-  <select id="fontsel" class="chip" title="终端字体" aria-label="终端字体">
+  <select id="fontsel" class="chip" data-i18n-title="font" data-i18n-aria="font">
     <option value="jetbrains">JetBrains Mono</option>
     <option value="ibmplex">IBM Plex Mono</option>
     <option value="fira">Fira Code</option>
@@ -152,13 +156,13 @@ const terminalPageHTML = `<!DOCTYPE html>
     <option value="dejavu">DejaVu Sans Mono</option>
   </select>
   <span class="stepper">
-    <button id="fdec" title="减小字体" aria-label="减小字体">&#8722;</button>
+    <button id="fdec" data-i18n-title="font_dec" data-i18n-aria="font_dec">&#8722;</button>
     <span id="fsize">14</span>
-    <button id="finc" title="增大字体" aria-label="增大字体">+</button>
+    <button id="finc" data-i18n-title="font_inc" data-i18n-aria="font_inc">+</button>
   </span>
-  <span id="size" title="终端 列×行"></span>
-  <button id="takeover" aria-label="切换人工接管">
-    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.5v9l7-4.5z"/></svg>人工接管
+  <span id="size" data-i18n-title="size"></span>
+  <button id="takeover" data-i18n-aria="takeover_aria">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.5v9l7-4.5z"/></svg>
   </button>
 </div>
 <div id="term"><div id="termbody"></div></div>
@@ -235,10 +239,39 @@ const terminalPageHTML = `<!DOCTYPE html>
   }
   var dot = document.getElementById("dot");
   var stateEl = document.getElementById("state");
-  var STATE_LABEL = { disconnected: "已断开连接", reconnecting: "重连中" };
+  var curState = "";
+  var langsel = document.getElementById("langsel");
+  var I18N = {
+    zh: { copy_id:"复制会话 ID", held:"人工操作中", theme:"配色主题", font:"终端字体",
+      font_dec:"减小字体", font_inc:"增大字体", size:"终端 列×行", lang_label:"界面语言",
+      takeover:"人工接管", takeover_stop:"退出接管", takeover_exit:"退出人工接管",
+      takeover_other:"他人接管中", takeover_locked:"该会话已被其他操作者接管，等其释放后方可接管",
+      takeover_aria:"切换人工接管", state_disconnected:"已断开连接", state_reconnecting:"重连中" },
+    en: { copy_id:"Copy session ID", held:"Human in control", theme:"Color theme", font:"Terminal font",
+      font_dec:"Decrease font size", font_inc:"Increase font size", size:"Terminal cols×rows", lang_label:"UI language",
+      takeover:"Take over", takeover_stop:"Stop takeover", takeover_exit:"Exit takeover",
+      takeover_other:"Controlled by another", takeover_locked:"This session is controlled by another operator; you can take over once they release it",
+      takeover_aria:"Toggle takeover", state_disconnected:"Disconnected", state_reconnecting:"Reconnecting" }
+  };
+  // 界面语言：localStorage 优先，否则按浏览器语言猜（zh* → zh，其余 en）。纯前端选择，不依赖服务端配置。
+  var LANG = (function(){ try{ var s=localStorage.getItem("terminal_mcp_lang"); if(s==="zh"||s==="en") return s; }catch(e){}
+    return ((navigator.language||"").toLowerCase().indexOf("zh")===0) ? "zh" : "en"; })();
+  function t(k){ return (I18N[LANG]||I18N.zh)[k]; }
+  function applyLang(lang){
+    if(lang){ LANG = (lang==="en") ? "en" : "zh"; }
+    try{ localStorage.setItem("terminal_mcp_lang", LANG); }catch(e){}
+    document.documentElement.lang = LANG;
+    document.querySelectorAll("[data-i18n]").forEach(function(el){ el.textContent = t(el.getAttribute("data-i18n")); });
+    document.querySelectorAll("[data-i18n-title]").forEach(function(el){ el.title = t(el.getAttribute("data-i18n-title")); });
+    document.querySelectorAll("[data-i18n-aria]").forEach(function(el){ el.setAttribute("aria-label", t(el.getAttribute("data-i18n-aria"))); });
+    if(langsel) langsel.value = LANG;
+    if(curState) stateEl.textContent = t("state_"+curState) || curState;
+    renderTakeover();
+  }
   var finished = false; // 已收到终态（disconnected），不再重连
   function setState(st){
-    stateEl.textContent = STATE_LABEL[st] || st;
+    curState = st;
+    stateEl.textContent = t("state_"+st) || st;
     dot.className = "s-" + st;
     if(st === "disconnected"){
       finished = true;
@@ -352,6 +385,8 @@ const terminalPageHTML = `<!DOCTYPE html>
   }catch(e){}
   if(fontsel){ fontsel.value=savedFont; fontsel.addEventListener("change", function(){ applyFont(fontsel.value); }); }
   if(themesel){ themesel.value=savedTheme; themesel.addEventListener("change", function(){ applyTheme(themesel.value); }); }
+  if(langsel){ langsel.addEventListener("change", function(){ applyLang(langsel.value); }); }
+  applyLang(); // 初始化界面语言（localStorage/浏览器语言），并据此渲染接管按钮与各控件文案
   var fdec=document.getElementById("fdec"), finc=document.getElementById("finc");
   if(fdec) fdec.addEventListener("click", function(){ applyFontSize((term.options.fontSize||14)-1); });
   if(finc) finc.addEventListener("click", function(){ applyFontSize((term.options.fontSize||14)+1); });
@@ -370,6 +405,16 @@ const terminalPageHTML = `<!DOCTYPE html>
      .then(function(j){ applyState(!!j.held, !!j.mine); }) // 200/409 均回传 {held,mine}
      .catch(function(){});
   }
+  // renderTakeover 按当前 holdMode + 语言重绘接管按钮（文案走 i18n，供 applyState 与 applyLang 复用）。
+  function renderTakeover(){
+    if(holdMode === "mine"){
+      btn.disabled = false; btn.innerHTML = ICON_STOP + t("takeover_stop"); btn.title = t("takeover_exit");
+    } else if(holdMode === "other"){
+      btn.disabled = true; btn.innerHTML = ICON_LOCK + t("takeover_other"); btn.title = t("takeover_locked");
+    } else {
+      btn.disabled = false; btn.innerHTML = ICON_PLAY + t("takeover"); btn.title = "";
+    }
+  }
   // applyState 依据服务端权威状态切三态：mine=本人接管、other=他人接管（禁用按钮）、free=空闲。
   // 用 holdMode 去重，避免轮询重复触发 openWS/focus 打断本地操作。
   function applyState(isHeld, mine){
@@ -377,18 +422,15 @@ const terminalPageHTML = `<!DOCTYPE html>
     if(mode === holdMode) return;
     holdMode = mode;
     held = (mode === "mine");
+    renderTakeover();
     if(mode === "mine"){
-      btn.disabled = false; btn.innerHTML = ICON_STOP + "退出接管"; btn.title = "退出人工接管";
       document.body.classList.remove("locked"); document.body.classList.add("held");
       openWS(); term.focus();
     } else if(mode === "other"){
       closeWS();
-      btn.disabled = true; btn.innerHTML = ICON_LOCK + "他人接管中";
-      btn.title = "该会话已被其他操作者接管，等其释放后方可接管";
       document.body.classList.remove("held"); document.body.classList.add("locked");
     } else {
       closeWS();
-      btn.disabled = false; btn.innerHTML = ICON_PLAY + "人工接管"; btn.title = "";
       document.body.classList.remove("held"); document.body.classList.remove("locked");
     }
   }

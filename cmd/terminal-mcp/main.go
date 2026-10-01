@@ -23,7 +23,21 @@ func main() {
 	listen := flag.String("listen", "", "override listen_addr")
 	flag.Parse()
 
-	c := config.Load(*confPath)
+	// 配置路径解析：显式 --config 优先；未指定时自动在当前目录查找 config.toml。
+	// 这样独立进程「在带有 config.toml 的目录里直接启动」即可生效，无需每次手敲 --config。
+	cp := *confPath
+	if cp == "" {
+		if _, err := os.Stat("config.toml"); err == nil {
+			cp = "config.toml"
+		}
+	}
+	if cp != "" {
+		log.Printf("terminal-mcp loading config from %s", cp)
+	} else {
+		log.Printf("terminal-mcp: no config file (pass --config or put config.toml in the working dir); using built-in defaults")
+	}
+
+	c := config.Load(cp)
 	if *listen != "" {
 		c.ListenAddr = *listen
 	}

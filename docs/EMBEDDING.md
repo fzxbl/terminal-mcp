@@ -149,4 +149,4 @@ Passed to `Init(configPath)`; TOML. All fields optional (sensible defaults).
 | `log_max_age_days` | `30` | Rotated-log retention. |
 | `audit_log` | (empty) | Audit log filename prefix (empty = `audit`). |
 
-See `config.example.toml` for a copy-paste starting point.
+See `config.example_en.toml` (or `config.example_zh.toml`) for a copy-paste starting point.

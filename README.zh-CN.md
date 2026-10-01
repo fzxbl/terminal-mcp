@@ -94,7 +94,7 @@ Agent 会开会话、跑命令、把结果流式带回。如果它需要输密�
 
 ## 配置
 
-复制 `config.example.toml`。要点：`listen_addr`、`data_dir`、`default_shell`、`ssh_user`、`ssh_opts`、`shell_switch_commands`（触发自动重新布哨的命令——可自行追加，如进容器命令）、`auto_rearm`、`max_buffer_bytes`（内存尾部缓存上限；完整日志落磁盘）、`exec_output_max_bytes`（单次返回上限；超出以 `output_ref` 返回，用 `terminal_explore` 探索）、`explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard`（explore 结果的服务端硬上限）、`transcript_retention_days`、`log_dir` / `log_rotate` / `log_max_age_days`。
+复制 `config.example_zh.toml`（中文注释；英文注释版见 `config.example_en.toml`）。要点：`listen_addr`、`data_dir`、`default_shell`、`ssh_user`、`ssh_opts`、`shell_switch_commands`（触发自动重新布哨的命令——可自行追加，如进容器命令）、`auto_rearm`、`max_buffer_bytes`（内存尾部缓存上限；完整日志落磁盘）、`exec_output_max_bytes`（单次返回上限；超出以 `output_ref` 返回，用 `terminal_explore` 探索）、`explore_max_bytes_hard` / `explore_read_limit_hard` / `explore_grep_limit_hard` / `explore_ctx_hard`（explore 结果的服务端硬上限）、`transcript_retention_days`、`log_dir` / `log_rotate` / `log_max_age_days`。
 
 **透明资源护栏（`resource_limit_cmd`）**：配一条对模型隐藏的 `ulimit`，随哨兵在会话启动时注入，并在每次切进新一层 shell（`ssh`/`su`/`docker exec`/`chroot` …）与 `hard` reset 时自动重注入。`ulimit` 不带 `-S/-H` 时同时设软硬限，硬限被子进程继承，非特权命令无法调高，故切 shell、跑别的命令都逃不出上限：
 

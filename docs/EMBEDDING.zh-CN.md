@@ -139,4 +139,4 @@ log.Fatal(http.ListenAndServe(":8900", h))
 | `log_max_age_days` | `30` | 切割日志保留天数。 |
 | `audit_log` | （空） | 审计日志文件名前缀（空 = `audit`）。 |
 
-可复制 `config.example.toml` 作为起点。
+可复制 `config.example_zh.toml`（英文注释版 `config.example_en.toml`）作为起点。

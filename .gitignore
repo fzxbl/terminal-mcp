@@ -1,11 +1,14 @@
 # build output
 /pty-bridge-mcp
 pty-bridge-mcp
+/main
 
 # runtime data (transcripts, spill) — created relative to cwd or configured data_dir
 /data
 data/
 *.raw
+# runtime logs (audit + service logs; may contain session data — never commit)
+/log/
 
 # test artifacts
 /tmp
@@ -13,3 +16,7 @@ data/
 # Local design, plan, and article records.
 /docs/superpowers/
 /docs/juejin-terminal-mcp.zh-CN.md
+
+# Local running config (private: ssh_user / login prologue / host-specific tuning).
+# Track the templates instead: config.example_zh.toml / config.example_en.toml.
+/config.toml
