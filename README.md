@@ -28,7 +28,7 @@ terminal-mcp nails five things:
 - **2. Full observability — the same screen the agent sees.** Every session has a live web terminal URL. Open it and watch, in real time, every keystroke and byte the agent produces. No guessing what your agent did.
 - **3. Take over to fix, release to resume — one session, driven by both.** See the agent heading the wrong way? Click *take over* and type straight into the running PTY; its writes pause instantly. Fix things by hand (enter a password, run the right command, back it out of a hole), then *release* — everything you typed is fed back as `[rc=n] $ command` with output, so the agent continues **with complete knowledge of what you just did**. No re-explaining, no lost state.
 - **4. A fence around the agent — transparent resource limits, inescapable across shell switches.** Configure a model-invisible `ulimit` that's injected at session start and **re-injected every time the agent hops into a new shell** (`ssh` remote / `su` / container). The hard limit is inherited by every child process, so unprivileged commands can't raise it back — the agent can't escape the cap by switching shells or running other commands. A safety net for autonomous agents, with zero awareness on the model side.
-- **5. Scales horizontally behind a load balancer.** Session-level routing (the owner node is encoded into the `session_id` and requests auto-reverse-proxy across nodes) lets you run it as a multi-node deployment behind an LB and add machines when you need more capacity; with configurable per-client session isolation, many users and agents run concurrently without stepping on each other. (See "Distributed deployment & horizontal scaling" below.)
+- **5. Scales horizontally behind a load balancer.** Session-level routing (the owner node is encoded into the `session_id` and requests auto-reverse-proxy across nodes) lets you run it as a multi-node deployment behind an LB and add machines when you need more capacity; each session is guarded by a one-time capability key, so many users and agents run concurrently without stepping on each other. (See "Distributed deployment & horizontal scaling" below.)
 
 Plus the machinery that makes the above reliable:
 
@@ -145,7 +145,7 @@ if err := mcpserver.MountWebTerminal("/mcp", func(pattern string, h http.Handler
 
 Two supporting capabilities:
 
-- **Per-client session isolation**: a configurable set of request headers (`[identity]`) yields a client signature; a client only sees/operates its own sessions, and cross-owner access always returns `session not found`. `terminal_list` fans out across nodes to aggregate that client's global view.
+- **Per-session capability auth**: `terminal_open` issues a one-time `session_key` for each session; every subsequent operation on that session must present it, otherwise it returns `session not found`. `X-MCP-USER` is recorded as the session owner at open time (read-only, surfaced in `terminal_list`) and used for audit logging — it is not an authorization credential. `terminal_list` fans out across nodes to aggregate the cluster's session view.
 - **Peer discovery**: reverse-proxy needs no list (the owner address is in the `session_id`); `terminal_list` aggregation needs a peer list, provided either via static `peers` config or a registered discovery function `SetPeerProvider(func() []string)` (Consul/etcd/DNS/K8s, etc.). This list also acts as the reverse-proxy allowlist (only known nodes may be proxied to, preventing a client-controlled `session_id` from steering the server to dial arbitrary addresses).
 
 Minimal config (**the same file on every node**):
@@ -157,14 +157,9 @@ listen_addr = "0.0.0.0:8900"
 # Sibling nodes for terminal_list cross-node aggregation (or provide via SetPeerProvider
 # for a fully config-free setup)
 peers = ["10.0.0.11:8900", "10.0.0.12:8900", "10.0.0.13:8900"]
-
-[identity]
-headers = ["X-MCP-USER"]   # identity header injected by a trusted gateway
-mode = "raw"                # raw | sha256
-on_missing = "reject"       # reject | allow_empty
 ```
 
-> Deployment notes: the identity header **must be injected by a trusted gateway** — nodes must not trust a client-supplied identity header. The owner address is auto-detected by the process (a wildcard `0.0.0.0` bind resolves to the machine's real IP), so every instance can share one config; only override via `SetSelfAddr` (embedding API) when behind NAT or when an externally mapped address is required. The human-facing `terminal_url` is set separately via `SetPublicBaseURL`; mount the web terminal through `MountWebTerminal` so multi-node requests proxy to the owner. `peers` can also be discovered dynamically via `SetPeerProvider`, making a distributed setup fully config-free.
+> Deployment notes: authorization is the per-session `session_key` issued by `terminal_open` — keep it secret and pass it on every call. The owner address is auto-detected by the process (a wildcard `0.0.0.0` bind resolves to the machine's real IP), so every instance can share one config; only override via `SetSelfAddr` (embedding API) when behind NAT or when an externally mapped address is required. The human-facing `terminal_url` is set separately via `SetPublicBaseURL`; mount the web terminal through `MountWebTerminal` so multi-node requests proxy to the owner. `peers` can also be discovered dynamically via `SetPeerProvider`, making a distributed setup fully config-free.
 
 ## Security
 

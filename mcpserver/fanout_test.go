@@ -18,7 +18,7 @@ func TestFanoutAggregates(t *testing.T) {
 	peerHost := peer.URL[len("http://"):]
 
 	local := []map[string]string{{"session_id": "local~s1", "status": "ready"}}
-	got := fanoutList(local, []string{peerHost}, http.Header{}, "alice")
+	got := fanoutList(local, []string{peerHost}, http.Header{})
 	if len(got) != 2 {
 		t.Fatalf("aggregated = %v (want local + peer)", got)
 	}

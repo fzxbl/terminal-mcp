@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/fzxbl/terminal-mcp/internal/audit"
 	"github.com/fzxbl/terminal-mcp/internal/config"
-	"github.com/fzxbl/terminal-mcp/internal/identity"
 	"github.com/fzxbl/terminal-mcp/internal/session"
 )
 
@@ -170,10 +168,7 @@ func resolveDesc(name string) string {
 func registerTools(server *mcp.Server, a *audit.Logger) {
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_open", Description: resolveDesc("terminal_open")},
 		func(_ context.Context, req *mcp.CallToolRequest, in openInput) (*mcp.CallToolResult, map[string]string, error) {
-			owner, ok := ownerSig(req)
-			if !ok {
-				return nil, nil, fmt.Errorf("missing required identity header(s): %v", config.Get().Identity.Headers)
-			}
+			owner := mcpUser(reqHeader(req))
 			res, err := session.Open(in.Mode, in.Command, in.Host, owner)
 			e := baseEntry(req, "terminal_open", map[string]any{
 				"mode": in.Mode, "host": in.Host, "command": in.Command,
@@ -189,8 +184,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_send", Description: resolveDesc("terminal_send")},
 		func(_ context.Context, req *mcp.CallToolRequest, in sendInput) (*mcp.CallToolResult, session.Envelope, error) {
-			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
+			if !session.Authorize(in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_send", map[string]any{"session_id": in.SessionID}, env)
 				return nil, env, nil
@@ -204,8 +198,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_output", Description: resolveDesc("terminal_output")},
 		func(_ context.Context, req *mcp.CallToolRequest, in outputInput) (*mcp.CallToolResult, session.Envelope, error) {
-			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
+			if !session.Authorize(in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_output", map[string]any{"session_id": in.SessionID, "wait_ms": in.WaitMs, "mode": in.Mode}, env)
 				return nil, env, nil
@@ -219,8 +212,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_explore", Description: resolveDesc("terminal_explore")},
 		func(_ context.Context, req *mcp.CallToolRequest, in exploreInput) (*mcp.CallToolResult, session.Envelope, error) {
-			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
+			if !session.Authorize(in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_explore", map[string]any{"session_id": in.SessionID, "op": in.Op, "output_ref": in.OutputRef}, env)
 				return nil, env, nil
@@ -238,8 +230,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_control", Description: resolveDesc("terminal_control")},
 		func(_ context.Context, req *mcp.CallToolRequest, in controlInput) (*mcp.CallToolResult, session.Envelope, error) {
-			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
+			if !session.Authorize(in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_control", map[string]any{"session_id": in.SessionID, "key": in.Key}, env)
 				return nil, env, nil
@@ -253,8 +244,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_status", Description: resolveDesc("terminal_status")},
 		func(_ context.Context, req *mcp.CallToolRequest, in sessionIDInput) (*mcp.CallToolResult, session.Envelope, error) {
-			owner, ok := ownerSig(req)
-			if !ok || !authorizeOwner(owner, in.SessionID, in.SessionKey) {
+			if !session.Authorize(in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead", Error: "session not found"}
 				logEnv(a, req, "terminal_status", map[string]any{"session_id": in.SessionID}, env)
 				return nil, env, nil
@@ -266,13 +256,7 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_close", Description: resolveDesc("terminal_close")},
 		func(_ context.Context, req *mcp.CallToolRequest, in sessionIDInput) (*mcp.CallToolResult, session.Envelope, error) {
-			owner, ok := ownerSig(req)
-			if !ok {
-				env := session.Envelope{State: "dead", Error: "session not found"}
-				logEnv(a, req, "terminal_close", map[string]any{"session_id": in.SessionID}, env)
-				return nil, env, nil
-			}
-			if !authorizeOwner(owner, in.SessionID, in.SessionKey) {
+			if !session.Authorize(in.SessionID, in.SessionKey) {
 				env := session.Envelope{State: "dead"}
 				logEnv(a, req, "terminal_close", map[string]any{"session_id": in.SessionID}, env)
 				return nil, env, nil
@@ -284,48 +268,18 @@ func registerTools(server *mcp.Server, a *audit.Logger) {
 
 	mcp.AddTool(server, &mcp.Tool{Name: "terminal_list", Description: resolveDesc("terminal_list")},
 		func(_ context.Context, req *mcp.CallToolRequest, _ emptyInput) (*mcp.CallToolResult, listOutput, error) {
-			owner, ok := ownerSig(req)
-			if !ok {
-				return nil, listOutput{}, fmt.Errorf("missing required identity header(s): %v", config.Get().Identity.Headers)
-			}
-			local := session.List(owner)
+			local := session.List()
 			var all []map[string]string
 			if req.Extra != nil && req.Extra.Header.Get(forwardedHeader) == "1" {
 				all = local
 			} else {
-				all = fanoutList(local, peerList(), reqHeader(req), owner)
+				all = fanoutList(local, peerList(), reqHeader(req))
 			}
 			e := baseEntry(req, "terminal_list", nil)
 			e.Bytes = len(all)
 			a.Log(e)
 			return nil, listOutput{Sessions: all}, nil
 		})
-}
-
-var (
-	signerMu  sync.Mutex
-	theSigner *identity.Signer
-)
-
-// signer 惰性构造身份签名器（读一次配置）。加锁避免 stateless 下并发请求同时初始化的数据竞争。
-func signer() *identity.Signer {
-	signerMu.Lock()
-	defer signerMu.Unlock()
-	if theSigner == nil {
-		c := config.Get()
-		theSigner = identity.New(c.Identity.Headers, c.Identity.Mode, c.Identity.OnMissing)
-	}
-	return theSigner
-}
-
-// ownerSig 从请求头算出调用方归属签名；ok=false 表示按 reject 策略缺头、应拒绝。
-func ownerSig(req *mcp.CallToolRequest) (string, bool) {
-	return signer().Signature(reqHeader(req))
-}
-
-// authorizeOwner 校验签名 owner 是否为会话 id 的属主。false → 越权或本机无此会话，按 not found 处理。
-func authorizeOwner(owner, id, capability string) bool {
-	return session.Authorize(id, owner, capability)
 }
 
 // baseEntry 构造带 CallerIP 与调用方标识（X-MCP-USER）的审计条目骨架。

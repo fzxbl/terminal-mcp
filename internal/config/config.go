@@ -85,19 +85,6 @@ type Config struct {
 	// Peers 是兄弟节点对外可达地址列表（host:port），仅用于 terminal_list 跨节点聚合（fan-out）。
 	// 反代路由不需要它——属主地址已编码在 session_id 内。单机部署留空即可。
 	Peers []string `toml:"peers"`
-
-	// Identity 定义"如何从请求头识别同一个客户端"。归属键 = 按 Headers 顺序取值拼接后按 Mode 处理。
-	Identity IdentityConfig `toml:"identity"`
-}
-
-// IdentityConfig 客户端身份签名配置。
-type IdentityConfig struct {
-	// Headers 参与签名的 HTTP header 名（有序）。默认 ["X-MCP-USER"]。
-	Headers []string `toml:"headers"`
-	// Mode 签名算法：raw（拼接原值）| sha256（对拼接值取十六进制哈希）。默认 raw。
-	Mode string `toml:"mode"`
-	// OnMissing 任一 header 缺失时的行为：reject（拒绝调用）| allow_empty（缺失位视为空串）。默认 reject。
-	OnMissing string `toml:"on_missing"`
 }
 
 func (c *Config) applyDefaults() {
@@ -202,15 +189,6 @@ func (c *Config) applyDefaults() {
 		}
 	}
 	// 注意：AutoRearm 不在此处理——其默认真在 Load() 里 DecodeFile 前置位，避免零值 false 覆盖默认。
-	if len(c.Identity.Headers) == 0 {
-		c.Identity.Headers = []string{"X-MCP-USER"}
-	}
-	if c.Identity.Mode != "raw" && c.Identity.Mode != "sha256" {
-		c.Identity.Mode = "raw"
-	}
-	if c.Identity.OnMissing != "reject" && c.Identity.OnMissing != "allow_empty" {
-		c.Identity.OnMissing = "reject"
-	}
 	if c.Peers == nil {
 		c.Peers = []string{}
 	}

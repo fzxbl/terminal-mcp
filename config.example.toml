@@ -71,14 +71,9 @@ disable_local_mode = false
 # 地址无关）。peers 也可用 SetPeerProvider 动态发现，从而完全免配置。
 # peers = ["10.0.0.2:8900", "10.0.0.3:8900"]
 
-# 客户端身份签名：决定「如何判定同一个客户端」，用于 terminal_list 归属隔离与会话越权保护。
-# 身份 header 只能由可信网关注入（节点不应直接信任外部客户端自带的该头）。
-# [identity]
-# headers = ["X-MCP-USER"]   # 参与签名的 header（有序），由可信网关注入
-# mode = "raw"                # raw（拼接原值）| sha256（对拼接值取哈希）
-# on_missing = "reject"       # reject（缺头则拒绝调用）| allow_empty（缺失位视为空串）
-# 注意：on_missing=allow_empty 时所有无身份头的客户端共享同一个"空签名"，会互相看到/操作彼此的会话；
-# 启用 identity 前创建的历史会话 owner 为空，启用后将对任何带身份的客户端不可见。生产环境建议保持 reject。
+# 会话鉴权：每个会话在 terminal_open 时签发一枚一次性 session_key（能力凭证），
+# 之后对该会话的所有操作（send/output/control/close 及网页端 stream/takeover/ws）都必须持有它。
+# 这是唯一的鉴权依据；X-MCP-USER 仅在 open 时记录为会话 owner（只读、可经 terminal_list 查看）并用于审计，不参与鉴权。
 
 # 工具描述覆盖：按工具名改写对外暴露给模型的 MCP 工具说明（集成到外部 MCP、需按自家话术改写时用）。
 # 缺省或留空的工具沿用内置默认描述。key 取以下工具名之一：

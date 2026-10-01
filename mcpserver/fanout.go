@@ -41,7 +41,7 @@ func peerList() []string {
 }
 
 // fanoutList 汇总本机会话与各 peer 的会话（按 session_id 去重）。单个 peer 失败不影响整体。
-func fanoutList(local []map[string]string, peerHosts []string, hdr http.Header, owner string) []map[string]string {
+func fanoutList(local []map[string]string, peerHosts []string, hdr http.Header) []map[string]string {
 	agg := map[string]map[string]string{}
 	for _, s := range local {
 		agg[s["session_id"]] = stripCapabilities(s)

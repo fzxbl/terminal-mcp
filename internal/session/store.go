@@ -19,7 +19,7 @@ var theStore *store
 // Session 是一个持久会话。live 句柄 proc 只在内存；元信息可落盘。
 type Session struct {
 	ID             string
-	Owner          string   // 客户端归属签名（见 internal/identity）；空表示无归属（历史/匿名）
+	Owner          string   // 开会话（Open）时绑定的调用方标识（X-MCP-USER）；只读元信息，不参与鉴权
 	capabilityHash [32]byte // bearer capability hash; plaintext is returned only by Open
 	Host           string
 	Mode           string

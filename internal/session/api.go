@@ -133,8 +133,7 @@ func localIP() string {
 //	mode=ssh:   ssh 到 host 上起 bash，command 忽略
 //
 // 用 Status 轮询到 idle/ready 后再交互；terminal_url 供人在浏览器观看并可"人工接管"。
-//
-// Open 起持久真 PTY 会话。owner 为调用方归属签名（见 internal/identity），写入会话用于归属隔离。
+// owner 在开会话时绑定（调用方标识，取自 X-MCP-USER），作为只读元信息随会话保存，不参与鉴权。
 func Open(mode, command, host, owner string) (map[string]string, error) {
 	switch mode {
 	case "local", "ssh":
@@ -169,25 +168,14 @@ func Open(mode, command, host, owner string) (map[string]string, error) {
 	}, nil
 }
 
-// Authorize checks both the existing owner signature and the per-session bearer capability.
-func Authorize(id, owner, capability string) bool {
-	if capability == "" || theStore == nil {
-		return false
-	}
-	s := theStore.get(id)
-	if s == nil || s.Owner != owner {
-		return false
-	}
-	return s.matchesCapability(capability)
-}
-
-// ValidCapability checks the per-session bearer capability for browser routes.
-func ValidCapability(id, capability string) bool {
+// Authorize checks the per-session bearer capability. Possession of the one-time
+// session_key issued by Open is the sole authorization; X-MCP-USER is audit-only.
+func Authorize(id, capability string) bool {
 	return LookupWithCapability(id, capability) != nil
 }
 
-// List 列出本实例中属于 owner 的会话及状态快照。owner 为空则不过滤（内部/兼容用途）。
-func List(owner string) []map[string]string {
+// List 列出本实例全部会话及状态快照（容量/状态只读视图）。
+func List() []map[string]string {
 	if theStore == nil {
 		return nil
 	}
@@ -195,9 +183,6 @@ func List(owner string) []map[string]string {
 	for _, s := range theStore.list() {
 		st, _ := s.snapshotStatus()
 		if st == "closed" {
-			continue
-		}
-		if owner != "" && s.Owner != owner {
 			continue
 		}
 		if st == "ready" {
@@ -211,6 +196,7 @@ func List(owner string) []map[string]string {
 		}
 		out = append(out, map[string]string{
 			"session_id":   s.ID,
+			"owner":        s.Owner,
 			"host":         s.Host,
 			"status":       st,
 			"idle_seconds": strconv.Itoa(int(s.idleSince().Seconds())),
@@ -218,16 +204,4 @@ func List(owner string) []map[string]string {
 		})
 	}
 	return out
-}
-
-// Owner 返回本机会话的归属签名；found=false 表示本机无此会话。
-func Owner(id string) (owner string, found bool) {
-	if theStore == nil {
-		return "", false
-	}
-	s := theStore.get(id)
-	if s == nil {
-		return "", false
-	}
-	return s.Owner, true
 }

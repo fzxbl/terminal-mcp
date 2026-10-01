@@ -28,7 +28,7 @@ terminal-mcp 把这几件事做到了极致：
 - **2. 全程可观测——和 Agent 看同一块屏。** 每个会话都有一个实时网页终端链接。打开它，就能实时看到 Agent 产生的每一个字节、每一次按键——不用再猜你的 Agent 到底干了什么。
 - **3. 接管即改、交回即续——人机同驾一个会话。** 看到 Agent 走偏？点「接管」直接往运行中的 PTY 里敲字，它的写入立刻暂停；你亲手把事情摆正（输密码、跑对命令、把它从坑里捞出来）后点「释放」，你敲过的每条命令都会以 `[rc=n] $ command` + 输出回喂给它，让它**带着"你刚才做了什么"的完整认知**无缝接着干——不用重新解释、不丢状态。
 - **4. 给模型加围栏——透明资源限制，切 shell 也逃不掉。** 可配置一条对模型**隐藏**的 `ulimit`：会话启动即注入，每次切进 `ssh` 远端 / `su` / 容器等新 shell 时**自动重注入**。硬限被所有子进程继承，非特权命令再怎么折腾也逃不出上限——给自主 Agent 一道「防跑飞」的资源围栏，模型全程无感知。
-- **5. 挂上负载均衡就能横向扩展。** 会话级路由（属主节点编码进 `session_id`、跨节点自动反向代理）让它能挂在 LB 后做多节点部署，容量不够就加机器；配合可配置身份的会话归属隔离，多人、多 Agent 并发也互不串扰。（详见下文「分布式部署与横向扩展」。）
+- **5. 挂上负载均衡就能横向扩展。** 会话级路由（属主节点编码进 `session_id`、跨节点自动反向代理）让它能挂在 LB 后做多节点部署，容量不够就加机器；每个会话由 terminal_open 签发的一次性 session_key 保护，多人、多 Agent 并发也互不串扰。（详见下文「分布式部署与横向扩展」。）
 
 以及让上面这些真正可靠的底层机制：
 
@@ -145,7 +145,7 @@ if err := mcpserver.MountWebTerminal("/mcp", func(pattern string, h http.Handler
 
 配套两项能力：
 
-- **会话归属隔离**：可配置一组请求头（`[identity]`）计算客户端签名；客户端只能看到/操作自己开的会话，越权访问一律返回 `session not found`。`terminal_list` 会跨节点 fan-out 聚合出该客户端的全局会话视图。
+- **会话能力鉴权**：`terminal_open` 为每个会话签发一枚一次性 `session_key`（能力凭证），之后对该会话的所有操作都必须持有它，否则一律返回 `session not found`。`X-MCP-USER` 在开会话时记录为会话 owner（只读，可在 `terminal_list` 查看）并用于审计日志，不参与鉴权。`terminal_list` 会跨节点 fan-out 聚合出本实例集群的会话视图。
 - **兄弟节点发现**：反代无需清单（属主地址已在 `session_id` 里）；`terminal_list` 聚合需要节点清单，可用静态配置 `peers`，或注册动态服务发现函数 `SetPeerProvider(func() []string)` 对接 Consul/etcd/DNS/K8s Endpoints 等。该清单同时用作反代白名单（只允许反代到已知节点，避免被客户端可控的 `session_id` 诱导访问任意地址）。
 
 最小配置（**所有节点共用同一份**）：
@@ -155,14 +155,9 @@ if err := mcpserver.MountWebTerminal("/mcp", func(pattern string, h http.Handler
 listen_addr = "0.0.0.0:8900"
 # 用于 terminal_list 跨节点聚合的兄弟节点（也可用 SetPeerProvider 动态提供，从而完全免配置）
 peers = ["10.0.0.11:8900", "10.0.0.12:8900", "10.0.0.13:8900"]
-
-[identity]
-headers = ["X-MCP-USER"]   # 由可信网关注入的身份头
-mode = "raw"                # raw | sha256
-on_missing = "reject"       # reject | allow_empty
 ```
 
-> 部署要点：身份头**只能由可信网关注入**，节点不应直接信任客户端自带的该头。属主地址默认由进程自动探测（把通配 `0.0.0.0` 解析为本机实际 IP），因此各实例可共用同一份配置；仅当跨 NAT/需对外映射地址时，才用嵌入接口 `SetSelfAddr` 显式覆盖；给人点的 `terminal_url` 另由 `SetPublicBaseURL` 指定，网页终端必须通过 `MountWebTerminal` 挂载，才能在多节点下反代到属主。`peers` 也可用 `SetPeerProvider` 动态发现，做到分布式下完全免配置。
+> 部署要点：鉴权依据是 `terminal_open` 为每个会话签发的 `session_key`——妥善保管、每次调用都带上它。属主地址默认由进程自动探测（把通配 `0.0.0.0` 解析为本机实际 IP），因此各实例可共用同一份配置；仅当跨 NAT/需对外映射地址时，才用嵌入接口 `SetSelfAddr` 显式覆盖；给人点的 `terminal_url` 另由 `SetPublicBaseURL` 指定，网页终端必须通过 `MountWebTerminal` 挂载，才能在多节点下反代到属主。`peers` 也可用 `SetPeerProvider` 动态发现，做到分布式下完全免配置。
 
 ## 安全
 

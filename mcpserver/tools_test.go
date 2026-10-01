@@ -81,7 +81,7 @@ func TestRegisterToolsSchemas(t *testing.T) {
 }
 
 func TestFanoutListStripsCapabilities(t *testing.T) {
-	got := fanoutList([]map[string]string{{"session_id": "s", "session_key": "secret", "host": "h"}}, nil, nil, "")
+	got := fanoutList([]map[string]string{{"session_id": "s", "session_key": "secret", "host": "h"}}, nil, nil)
 	if len(got) != 1 || got[0]["session_key"] != "" || got[0]["capability_hash"] != "" || got[0]["host"] != "h" {
 		t.Fatalf("fanout list exposed capability or lost fields: %#v", got)
 	}
@@ -205,33 +205,13 @@ func TestOpenValidation(t *testing.T) {
 	})
 }
 
-func TestOwnerSigFromHeader(t *testing.T) {
-	// 默认配置 headers=[X-MCP-USER], mode=raw, on_missing=reject
-	Init("")
-	theSigner = nil // 重置惰性 signer，确保读取默认配置
-	h := http.Header{}
-	h.Set("X-MCP-USER", "alice")
-	sig, ok := signer().Signature(h)
-	if !ok || sig != "alice" {
-		t.Fatalf("ownerSig = (%q,%v)", sig, ok)
-	}
-}
-
-func TestAuthorizeOwnerUnknownSession(t *testing.T) {
-	session.InitStore(10)
-	if authorizeOwner("alice", "no-such-id", "") {
-		t.Fatalf("unknown session must not authorize")
-	}
-}
-
 func TestCloseIsIdempotentAndNonDisclosingAtMCPBoundary(t *testing.T) {
 	Init("")
 	session.InitStore(10)
-	theSigner = nil
 
-	opened, err := session.Open("local", "", "", "alice")
+	opened, err := session.Open("local", "", "", "")
 	if err != nil {
-		t.Fatalf("open alice session: %v", err)
+		t.Fatalf("open session: %v", err)
 	}
 	id := opened["session_id"]
 	t.Cleanup(func() { session.Close(id) })

@@ -41,7 +41,7 @@ func waitForState(t *testing.T, id, want string) Envelope {
 
 func cleanupSessions(t *testing.T) {
 	t.Helper()
-	for _, item := range List("") {
+	for _, item := range List() {
 		Close(item["session_id"])
 	}
 }
@@ -58,7 +58,7 @@ func TestExitedSessionStatusAndListConvergeOnDead(t *testing.T) {
 		t.Fatalf("Status(%s).State = %q, want dead", id, got)
 	}
 
-	listed := List("")
+	listed := List()
 	if len(listed) != 1 {
 		t.Fatalf("List returned %d sessions, want 1: %v", len(listed), listed)
 	}
@@ -80,7 +80,7 @@ func TestDeadSessionsRemainUntilCloseAndCapacityRecovers(t *testing.T) {
 		}
 	}
 
-	listed := List("")
+	listed := List()
 	if len(listed) != 4 {
 		t.Fatalf("List returned %d sessions, want four retained dead sessions: %v", len(listed), listed)
 	}
@@ -99,7 +99,7 @@ func TestDeadSessionsRemainUntilCloseAndCapacityRecovers(t *testing.T) {
 			t.Fatalf("Close(%s) = %+v, want successful dead envelope", id, env)
 		}
 	}
-	if got := List(""); len(got) != 0 {
+	if got := List(); len(got) != 0 {
 		t.Fatalf("List after explicit closes = %v, want empty", got)
 	}
 
@@ -107,7 +107,7 @@ func TestDeadSessionsRemainUntilCloseAndCapacityRecovers(t *testing.T) {
 	if env := Close(replacement); env.Error != "" || env.State != "dead" {
 		t.Fatalf("Close(replacement) = %+v, want successful dead envelope", env)
 	}
-	if got := List(""); len(got) != 0 {
+	if got := List(); len(got) != 0 {
 		t.Fatalf("final List = %v, want empty", got)
 	}
 }

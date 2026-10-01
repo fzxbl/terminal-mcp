@@ -5,12 +5,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
-	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/fzxbl/terminal-mcp/internal/config"
-	"github.com/fzxbl/terminal-mcp/internal/identity"
 )
 
 func TestCapabilityAuthorizationAndHashStorage(t *testing.T) {
@@ -21,22 +19,21 @@ func TestCapabilityAuthorizationAndHashStorage(t *testing.T) {
 	}
 	keyA := base64.RawURLEncoding.EncodeToString(keyABytes)
 	keyB := base64.RawURLEncoding.EncodeToString(keyBBytes)
-	a := &Session{ID: "cap-a", Owner: "same-account"}
-	b := &Session{ID: "cap-b", Owner: "same-account"}
+	a := &Session{ID: "cap-a"}
+	b := &Session{ID: "cap-b"}
 	a.setCapability(keyA)
 	b.setCapability(keyB)
 	InitStore(10)
 	theStore.add(a)
 	theStore.add(b)
-	if !Authorize(a.ID, a.Owner, keyA) {
-		t.Fatal("correct owner and key should authorize")
+	if !Authorize(a.ID, keyA) {
+		t.Fatal("correct key should authorize")
 	}
-	for _, tc := range []struct{ id, owner, key string }{
-		{a.ID, a.Owner, ""}, {a.ID, a.Owner, keyB}, {a.ID, "other", keyA},
-		{b.ID, b.Owner, keyA}, {"missing", a.Owner, keyA},
+	for _, tc := range []struct{ id, key string }{
+		{a.ID, ""}, {a.ID, keyB}, {b.ID, keyA}, {"missing", keyA},
 	} {
-		if Authorize(tc.id, tc.owner, tc.key) {
-			t.Fatalf("unexpected authorization for id=%q owner=%q key=%q", tc.id, tc.owner, tc.key)
+		if Authorize(tc.id, tc.key) {
+			t.Fatalf("unexpected authorization for id=%q key=%q", tc.id, tc.key)
 		}
 	}
 	if got := a.capabilityHash; got != sha256.Sum256([]byte(keyA)) {
@@ -47,37 +44,16 @@ func TestCapabilityAuthorizationAndHashStorage(t *testing.T) {
 	}
 }
 
-func TestAuthorizeAllowsEmptyOwnerOnlyWithCorrectCapability(t *testing.T) {
-	owner, ok := identity.New([]string{"X-MCP-USER"}, "raw", "allow_empty").Signature(http.Header{})
-	if !ok || owner != "" {
-		t.Fatalf("allow_empty identity signature = (%q,%v), want empty and allowed", owner, ok)
-	}
-	const key = "allow-empty-owner-capability"
-	s := &Session{ID: "empty-owner", Owner: owner}
-	s.setCapability(key)
-	InitStore(2)
-	theStore.add(s)
-	if !Authorize(s.ID, owner, key) {
-		t.Fatal("empty stored owner with allow_empty signature and correct capability must authorize")
-	}
-	if Authorize(s.ID, owner, "wrong-capability") {
-		t.Fatal("wrong capability must not authorize empty owner")
-	}
-	if Authorize(s.ID, owner, "") {
-		t.Fatal("missing capability must not authorize empty owner")
-	}
-}
-
 func TestOpenIssuesUniqueOneTimeCapabilityAndFragmentURL(t *testing.T) {
 	config.Load("")
 	SetPublicBaseURL("http://127.0.0.1:1")
 	t.Cleanup(func() { SetPublicBaseURL("") })
 	InitStore(4)
-	a, err := Open("local", "", "", "owner")
+	a, err := Open("local", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Open("local", "", "", "owner")
+	b, err := Open("local", "", "", "")
 	if err != nil {
 		Close(a["session_id"])
 		t.Fatal(err)
@@ -155,34 +131,27 @@ func TestURLHostPort(t *testing.T) {
 	}
 }
 
-func TestListFilfersByOwner(t *testing.T) {
+func TestListExposesOwnerButNotCapability(t *testing.T) {
 	InitStore(10)
 	SetSelfAddr("")
-	a := &Session{ID: "a", Owner: "alice", Status: "ready"}
-	b := &Session{ID: "b", Owner: "bob", Status: "ready"}
-	theStore.add(a)
-	theStore.add(b)
+	theStore.add(&Session{ID: "a", Owner: "alice", Status: "ready"})
+	theStore.add(&Session{ID: "b", Owner: "bob", Status: "ready"})
 
-	got := List("alice")
-	if len(got) != 1 || got[0]["session_id"] != "a" {
-		t.Fatalf("List(alice) = %v", got)
+	got := List()
+	if len(got) != 2 {
+		t.Fatalf("List() = %v, want 2 sessions", got)
 	}
-	for _, key := range []string{"session_key", "capability", "capability_hash"} {
-		if _, ok := got[0][key]; ok {
-			t.Fatalf("List exposed %q: %v", key, got[0])
+	owners := map[string]string{}
+	for _, s := range got {
+		owners[s["session_id"]] = s["owner"]
+		for _, key := range []string{"session_key", "capability", "capability_hash"} {
+			if _, ok := s[key]; ok {
+				t.Fatalf("List exposed %q: %v", key, s)
+			}
 		}
 	}
-}
-
-func TestOwnerLookup(t *testing.T) {
-	InitStore(10)
-	theStore.add(&Session{ID: "x", Owner: "alice"})
-	owner, ok := Owner("x")
-	if !ok || owner != "alice" {
-		t.Fatalf("Owner(x) = (%q,%v)", owner, ok)
-	}
-	if _, ok := Owner("missing"); ok {
-		t.Fatalf("Owner(missing) should be false")
+	if owners["a"] != "alice" || owners["b"] != "bob" {
+		t.Fatalf("List owner metadata = %v, want a=alice b=bob", owners)
 	}
 }
 
