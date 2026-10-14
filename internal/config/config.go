@@ -54,6 +54,7 @@ type Config struct {
 	// 通常是 ulimit（如 "ulimit -v 4194304; ulimit -t 600; ulimit -u 4096"）。
 	// 它随哨兵一起写在初始化脚本最前面，且在每次「切进新一层 shell」的自动/手动重新布哨（rearm）、
 	// hard reset 时都会重新注入，因此：
+	//   - local 自定义命令（terminal_open command=）在 exec 前先执行本命令，限额先于命令首条指令生效；
 	//   - 启动时即作用于会话根 shell，被其所有子进程继承（ulimit 无 -S/-H 时同时设软硬限，硬限一经设定
 	//     非特权进程无法再调高，故本地子 shell / 普通命令即便再 `ulimit` 也无法逃逸出该上限）；
 	//   - 切进 ssh 远端 / su / docker exec / chroot 等新 shell（见 shell_switch_commands）后由 rearm

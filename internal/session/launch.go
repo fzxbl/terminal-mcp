@@ -8,7 +8,8 @@ import (
 
 // BuildStartArgs 构造 exec 的 name+args。
 //
-//	mode=local: 直接跑 shell/command（command 为空则用 default_shell）
+//	mode=local: 直接跑 shell/command（command 为空则用 default_shell）；配置了 resource_limit_cmd 时
+//	            自定义命令以 sh -c '<limit>; exec sh -c "$1"' sh <command> 启动，限额先于命令生效
 //	mode=ssh:   ssh <ssh_opts> <ssh_user>@<host> 'TERM=xterm-256color bash --norc --noprofile'
 //	            若配置了 ssh_login_prologue，则以 sh -c '<prologue> </dev/null && exec "$@"' 包一层，
 //	            让鉴证在本地同一 PTY 会话内先完成、再 exec 进 ssh（不残留本地交互 shell）。
@@ -40,6 +41,13 @@ func BuildStartArgs(mode, hostOrCommand string) (string, []string) {
 		return "ssh", args
 	default: // local
 		if hostOrCommand != "" {
+			// 资源限制必须在自定义命令第一条指令执行前生效：初始化脚本经 PTY 事后写入，对已在跑的
+			// 自定义命令无效。故先在同一进程内执行 resource_limit_cmd（与普通会话一致：尽力而为，单条失败不
+			// 阻断后续），再 exec 顶替为 sh -c "$1"；用户命令经位置参数透传，不被二次解析。
+			if rl := strings.TrimSpace(c.ResourceLimitCmd); rl != "" {
+				inner := rl + "\nexec sh -c \"$1\""
+				return "sh", []string{"-c", inner, "sh", hostOrCommand}
+			}
 			return "sh", []string{"-c", hostOrCommand}
 		}
 		return c.DefaultShell, []string{"--norc", "--noprofile"}
